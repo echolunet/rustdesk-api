@@ -19,37 +19,6 @@ if ! docker compose version >/dev/null 2>&1; then
   exit 1
 fi
 
-if [ -f "./docker-compose.yml" ] && [ -f "./.env.example" ]; then
-  INSTALL_DIR="$(pwd)"
-else
-  INSTALL_DIR="${RUSTDESK_DIR:-/opt/rustdesk-api}"
-  mkdir -p "$INSTALL_DIR"
-  cd "$INSTALL_DIR"
-fi
-echo "[*] Deploy directory: $INSTALL_DIR"
-
-# Download required compose/script files when run outside a cloned repository
-download_if_missing() {
-  local rel="$1"
-  local target="$INSTALL_DIR/$rel"
-  if [ ! -f "$target" ]; then
-    mkdir -p "$(dirname "$target")"
-    echo "[*] Downloading $rel ..."
-    curl -fsSL "$RAW_BASE/$rel" -o "$target"
-  fi
-}
-
-download_if_missing "docker-compose.yml"
-download_if_missing "docker-compose.build.yml"
-download_if_missing ".env.example"
-download_if_missing "scripts/update.sh"
-download_if_missing "scripts/sync-webclient.sh"
-chmod +x "$INSTALL_DIR/scripts/update.sh" "$INSTALL_DIR/scripts/sync-webclient.sh" 2>/dev/null || true
-
-# Detect public IPv4 as default server address
-DETECTED_IP="$(curl -fsS --max-time 4 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 4 https://ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "127.0.0.1")"
-DETECTED_IP="${DETECTED_IP:-127.0.0.1}"
-
 PROMPT_IN=""
 if [ "${NON_INTERACTIVE:-0}" != "1" ] && { [ -t 0 ] || [ -r /dev/tty ]; }; then
   PROMPT_IN="/dev/tty"
@@ -70,6 +39,75 @@ ask() {
     printf "%s" "$reply"
   fi
 }
+
+if [ -z "${CN_MIRROR+x}" ] && [ -n "$PROMPT_IN" ]; then
+  CN_ANS="$(ask "Use Mainland China mirror acceleration? (1=Yes, 0=Direct)" "0")"
+  case "$CN_ANS" in
+    1|y|Y|yes|YES) CN_MIRROR="1" ;;
+    *) CN_MIRROR="0" ;;
+  esac
+fi
+CN_MIRROR="${CN_MIRROR:-0}"
+
+GH_PROXY="${GH_PROXY:-https://gh-proxy.com}"
+GH_PROXY="${GH_PROXY%/}"
+
+if [ "$CN_MIRROR" = "1" ]; then
+  echo "[*] Mainland China acceleration enabled (GH proxy: ${GH_PROXY}, registry: ghcr.nju.edu.cn)"
+  RUSTDESK_SERVER_IMAGE="${RUSTDESK_SERVER_IMAGE:-ghcr.nju.edu.cn/rustdesk/rustdesk-server:latest}"
+  API_IMAGE="${API_IMAGE:-ghcr.nju.edu.cn/echolunet/rustdesk-api:latest}"
+  GOPROXY="${GOPROXY:-https://goproxy.cn,direct}"
+fi
+
+if [ -f "./docker-compose.yml" ] && [ -f "./.env.example" ]; then
+  INSTALL_DIR="$(pwd)"
+else
+  INSTALL_DIR="${RUSTDESK_DIR:-/opt/rustdesk-api}"
+  mkdir -p "$INSTALL_DIR"
+  cd "$INSTALL_DIR"
+fi
+echo "[*] Deploy directory: $INSTALL_DIR"
+
+# Download required compose/script files when run outside a cloned repository
+download_if_missing() {
+  local rel="$1"
+  local target="$INSTALL_DIR/$rel"
+  if [ ! -f "$target" ]; then
+    mkdir -p "$(dirname "$target")"
+    echo "[*] Downloading $rel ..."
+    if [ "$CN_MIRROR" = "1" ]; then
+      curl -fsSL --max-time 25 "${GH_PROXY}/${RAW_BASE}/${rel}" -o "$target" || curl -fsSL "${RAW_BASE}/${rel}" -o "$target"
+    else
+      curl -fsSL "${RAW_BASE}/${rel}" -o "$target"
+    fi
+  fi
+}
+
+download_if_missing "docker-compose.yml"
+download_if_missing "docker-compose.build.yml"
+download_if_missing ".env.example"
+download_if_missing "scripts/update.sh"
+download_if_missing "scripts/sync-webclient.sh"
+chmod +x "$INSTALL_DIR/scripts/update.sh" "$INSTALL_DIR/scripts/sync-webclient.sh" 2>/dev/null || true
+
+# Detect public IPv4 as default server address
+detect_public_ip() {
+  local ip=""
+  if [ "$CN_MIRROR" = "1" ]; then
+    ip="$(curl -fsS --max-time 4 https://4.ipw.cn 2>/dev/null || true)"
+    if [ -z "$ip" ]; then
+      ip="$(curl -fsS --max-time 4 https://myip.ipip.net 2>/dev/null | grep -Eo '([0-9]{1,3}\.){3}[0-9]{1,3}' | head -n1 || true)"
+    fi
+  fi
+  if [ -z "$ip" ]; then
+    ip="$(curl -fsS --max-time 4 https://api.ipify.org 2>/dev/null || curl -fsS --max-time 4 https://ifconfig.me 2>/dev/null || true)"
+  fi
+  if [ -z "$ip" ]; then
+    ip="$(hostname -I 2>/dev/null | awk '{print $1}' || true)"
+  fi
+  printf "%s" "${ip:-127.0.0.1}"
+}
+DETECTED_IP="$(detect_public_ip)"
 
 SHOULD_WRITE_ENV="1"
 if [ -f "$INSTALL_DIR/.env" ]; then
@@ -172,12 +210,17 @@ if [ "$SHOULD_WRITE_ENV" = "1" ]; then
   set_env_kv "$INSTALL_DIR/.env" "CLIENT_DEFAULT_IMAGE_QUALITY" "custom"
   set_env_kv "$INSTALL_DIR/.env" "CLIENT_DEFAULT_FPS" "$FPS_VAL"
   set_env_kv "$INSTALL_DIR/.env" "CLIENT_DEFAULT_QUALITY" "$QUALITY_VAL"
+  if [ -n "${RUSTDESK_SERVER_IMAGE:-}" ]; then
+    set_env_kv "$INSTALL_DIR/.env" "RUSTDESK_SERVER_IMAGE" "$RUSTDESK_SERVER_IMAGE"
+  fi
   if [ -n "${API_IMAGE:-}" ]; then
     set_env_kv "$INSTALL_DIR/.env" "API_IMAGE" "$API_IMAGE"
   fi
+  if [ -n "${GOPROXY:-}" ]; then
+    set_env_kv "$INSTALL_DIR/.env" "GOPROXY" "$GOPROXY"
+  fi
   echo "[*] Wrote configuration to $INSTALL_DIR/.env (Default FPS: ${FPS_VAL})"
 else
-  # Read display defaults from existing .env
   API_PORT="$(grep -E '^API_PORT=' "$INSTALL_DIR/.env" | head -n1 | cut -d= -f2- || echo "21114")"
   API_PORT="$(clamp_int "${API_PORT:-21114}" 1 65535 21114)"
   API_URL_LINE="$(grep -E '^RUSTDESK_API_SERVER=' "$INSTALL_DIR/.env" | head -n1 | cut -d= -f2- || echo "")"
@@ -190,20 +233,24 @@ docker compose pull hbbs hbbr
 USE_LOCAL_BUILD="0"
 echo "[*] Pulling prebuilt rustdesk-api image..."
 if ! docker compose pull rustdesk-api; then
-  echo "[!] Prebuilt GHCR image pull failed (package may not be built yet or still private)."
+  echo "[!] Prebuilt image pull failed (package may not be built yet or still private)."
   if [ -f "$INSTALL_DIR/Dockerfile" ] && [ -f "$INSTALL_DIR/go.mod" ]; then
     USE_LOCAL_BUILD="1"
   elif command -v git >/dev/null 2>&1; then
     echo "[*] Cloning source to $INSTALL_DIR/src for automatic fallback build..."
     rm -rf "$INSTALL_DIR/src"
-    git clone --depth 1 -b "$BRANCH" "$GIT_URL" "$INSTALL_DIR/src"
+    if [ "$CN_MIRROR" = "1" ]; then
+      git clone --depth 1 -b "$BRANCH" "${GH_PROXY}/${GIT_URL}" "$INSTALL_DIR/src" || git clone --depth 1 -b "$BRANCH" "$GIT_URL" "$INSTALL_DIR/src"
+    else
+      git clone --depth 1 -b "$BRANCH" "$GIT_URL" "$INSTALL_DIR/src"
+    fi
     cp -n "$INSTALL_DIR/.env" "$INSTALL_DIR/src/.env" 2>/dev/null || cp "$INSTALL_DIR/.env" "$INSTALL_DIR/src/.env"
     mkdir -p "$INSTALL_DIR/data"
     cd "$INSTALL_DIR/src"
     USE_LOCAL_BUILD="1"
   else
-    echo "Error: Could not pull GHCR image and git is unavailable for fallback build." >&2
-    echo "Hint: Set GHCR package ghcr.io/${REPO_SLUG} to Public on GitHub, or install git to build locally." >&2
+    echo "Error: Could not pull API image and git is unavailable for fallback build." >&2
+    echo "Hint: Set GHCR package ghcr.io/${REPO_SLUG} to Public on GitHub, configure ACR_*, or install git to build locally." >&2
     exit 1
   fi
 fi
@@ -229,6 +276,8 @@ INIT_PASS="$(docker compose logs rustdesk-api 2>&1 | grep -iE 'Initial Admin|pas
 ENV_API_URL="${API_URL_LINE:-http://${SERVER_HOST:-$DETECTED_IP}:${API_PORT}}"
 ENV_ID_SRV="$(grep -E '^RUSTDESK_ID_SERVER=' .env | head -n1 | cut -d= -f2- || echo "${DETECTED_IP}:21116")"
 ENV_RELAY_SRV="$(grep -E '^RUSTDESK_RELAY_SERVER=' .env | head -n1 | cut -d= -f2- || echo "${DETECTED_IP}:21117")"
+ENV_API_IMAGE="$(grep -E '^API_IMAGE=' .env | head -n1 | cut -d= -f2- || echo "${API_IMAGE:-ghcr.io/${REPO_SLUG}:latest}")"
+ENV_SRV_IMAGE="$(grep -E '^RUSTDESK_SERVER_IMAGE=' .env | head -n1 | cut -d= -f2- || echo "${RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:latest}")"
 
 echo ""
 echo "=================================================="
@@ -241,6 +290,9 @@ echo "  Relay Server      : ${ENV_RELAY_SRV}"
 echo "  API Server        : ${ENV_API_URL}"
 echo "  Official Key      : ${PUB_KEY:-Pending in ./data/server/id_ed25519.pub}"
 echo "  Default FPS Push  : ${FPS_VAL} FPS (configurable in Admin -> 客户端策略)"
+echo "  CN Mirror Mode    : $([ "$CN_MIRROR" = "1" ] && echo "Enabled (${GH_PROXY})" || echo "Disabled")"
+echo "  API Image         : ${ENV_API_IMAGE}"
+echo "  Official Server   : ${ENV_SRV_IMAGE}"
 echo "--------------------------------------------------"
 echo "  Initial Admin Info (first boot only):"
 if [ -n "$INIT_PASS" ]; then

@@ -89,6 +89,29 @@ curl -fsSL https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts
 >   curl -fsSL https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts/install.sh | bash
 > ```
 
+### 国内 VPS 加速部署与阿里云 ACR 双推
+
+1. **一键脚本国内加速模式（`CN_MIRROR=1`）**
+
+   通过 `gh-proxy.com` 拉取安装文件/源码，自动切换南大 `ghcr.nju.edu.cn` 镜像站及 `goproxy.cn`：
+   ```bash
+   CN_MIRROR=1 SERVER_HOST=你的服务器IP DEFAULT_FPS=60 NON_INTERACTIVE=1 \
+     curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts/install.sh | bash
+   ```
+   若已开启下方阿里云 ACR 自动同步，也可直接指定拉取你自己的私有/公有 ACR 镜像：
+   ```bash
+   CN_MIRROR=1 SERVER_HOST=你的服务器IP API_IMAGE=registry.cn-hangzhou.aliyuncs.com/<你的命名空间>/rustdesk-api:latest \
+     curl -fsSL https://gh-proxy.com/https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts/install.sh | bash
+   ```
+
+2. **启用 GitHub Actions 自动双推阿里云个人版镜像仓库（ACR）**
+
+   [.github/workflows/docker-publish.yml](.github/workflows/docker-publish.yml) 支持单次多架构构建后同时推送 GHCR 与阿里云 ACR。前往 GitHub 仓库 **Settings → Secrets and variables → Actions** 添加以下 4 个 Secret（未配置时自动跳过、仅推送 GHCR）：
+   - `ACR_REGISTRY`：例如 `registry.cn-hangzhou.aliyuncs.com`
+   - `ACR_NAMESPACE`：你的阿里云 ACR 命名空间名称
+   - `ACR_USERNAME`：阿里云 ACR 访问账号（建议新建固定访问凭证/RAM 账号）
+   - `ACR_PASSWORD`：对应镜像仓库固定密码
+
 ### 方式二：仅 Compose 直接拉取预构建镜像
 
 无需克隆仓库或编译源码，仅下载编排与配置模板即可启动：
