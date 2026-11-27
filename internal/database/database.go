@@ -1,6 +1,7 @@
 package database
 
 import (
+	"context"
 	"crypto/rand"
 	"errors"
 	"fmt"
@@ -41,7 +42,9 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 	}
 
 	db, err := gorm.Open(dialector, &gorm.Config{
-		Logger: logger.Default.LogMode(gormLogLevel),
+		Logger:                 logger.Default.LogMode(gormLogLevel),
+		PrepareStmt:            true,
+		SkipDefaultTransaction: true,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("open database: %w", err)
@@ -53,9 +56,18 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		}
 		if !strings.Contains(cfg.DBDSN, ":memory:") {
 			db.Exec("PRAGMA journal_mode=WAL;")
+			db.Exec("PRAGMA mmap_size=268435456;")
 		}
+		db.Exec("PRAGMA synchronous=NORMAL;")
+		db.Exec("PRAGMA cache_size=-32000;")
+		db.Exec("PRAGMA temp_store=MEMORY;")
 		db.Exec("PRAGMA busy_timeout=5000;")
 		db.Exec("PRAGMA foreign_keys=ON;")
+	} else if sqlDB, err := db.DB(); err == nil {
+		sqlDB.SetMaxOpenConns(50)
+		sqlDB.SetMaxIdleConns(16)
+		sqlDB.SetConnMaxLifetime(30 * time.Minute)
+		sqlDB.SetConnMaxIdleTime(5 * time.Minute)
 	}
 
 	if err := db.AutoMigrate(
@@ -249,4 +261,27 @@ func randomPassword(length int) (string, error) {
 		buf[i] = charset[n.Int64()]
 	}
 	return string(buf), nil
+}
+
+// StartCleanupLoop periodically purges expired tokens, verification codes, and OAuth sessions.
+func StartCleanupLoop(ctx context.Context, db *gorm.DB) {
+	cleanup := func() {
+		now := time.Now()
+		_ = db.Where("expires_at < ?", now).Delete(&model.UserToken{}).Error
+		_ = db.Where("expires_at < ?", now).Delete(&model.VerificationCode{}).Error
+		_ = db.Where("expires_at < ?", now).Delete(&model.OAuthSession{}).Error
+	}
+
+	go func() {
+		ticker := time.NewTicker(30 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				cleanup()
+			}
+		}
+	}()
 }

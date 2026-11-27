@@ -281,21 +281,31 @@ func syncDeviceGroupAccess(tx *gorm.DB, dgID uint, userGroupIDs, userIDs []uint)
 	if err := tx.Where("device_group_id = ?", dgID).Delete(&model.DeviceGroupAccess{}).Error; err != nil {
 		return err
 	}
+	rows := make([]model.DeviceGroupAccess, 0, len(userGroupIDs)+len(userIDs))
+	seenUG := make(map[uint]struct{}, len(userGroupIDs))
 	for _, ugID := range userGroupIDs {
 		if ugID == 0 {
 			continue
 		}
-		if err := tx.Create(&model.DeviceGroupAccess{DeviceGroupID: dgID, UserGroupID: ugID}).Error; err != nil {
-			return err
+		if _, ok := seenUG[ugID]; ok {
+			continue
 		}
+		seenUG[ugID] = struct{}{}
+		rows = append(rows, model.DeviceGroupAccess{DeviceGroupID: dgID, UserGroupID: ugID})
 	}
+	seenU := make(map[uint]struct{}, len(userIDs))
 	for _, uID := range userIDs {
 		if uID == 0 {
 			continue
 		}
-		if err := tx.Create(&model.DeviceGroupAccess{DeviceGroupID: dgID, UserID: uID}).Error; err != nil {
-			return err
+		if _, ok := seenU[uID]; ok {
+			continue
 		}
+		seenU[uID] = struct{}{}
+		rows = append(rows, model.DeviceGroupAccess{DeviceGroupID: dgID, UserID: uID})
+	}
+	if len(rows) > 0 {
+		return tx.CreateInBatches(&rows, 100).Error
 	}
 	return nil
 }

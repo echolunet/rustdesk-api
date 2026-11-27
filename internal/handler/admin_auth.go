@@ -183,6 +183,7 @@ func (h *AdminAuthHandler) ChangePassword(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to update password"})
 		return
 	}
+	h.authSvc.InvalidateUserCache(user.ID)
 	c.JSON(http.StatusOK, gin.H{"message": "password updated"})
 }
 
@@ -227,6 +228,7 @@ func (h *AdminAuthHandler) ConfirmMy2FA(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 		return
 	}
+	h.authSvc.InvalidateUserCache(user.ID)
 	c.JSON(http.StatusOK, gin.H{
 		"totp_enabled":   true,
 		"recovery_codes": codes,
@@ -256,18 +258,24 @@ func (h *AdminAuthHandler) DisableMy2FA(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to disable 2FA"})
 		return
 	}
+	h.authSvc.InvalidateUserCache(user.ID)
 	c.JSON(http.StatusOK, gin.H{"totp_enabled": false})
 }
 
 // Dashboard returns aggregate counts, recent logs, and client config summary for the admin overview page.
 func (h *AdminAuthHandler) Dashboard(c *gin.Context) {
-	var userCount, peerCount, onlinePeerCount, abCount, connCount, loginCount int64
+	var userCount, abCount, connCount, loginCount int64
 	cutoff := time.Now().Add(-3 * time.Minute)
 	dayAgo := time.Now().Add(-24 * time.Hour)
 
+	var peerAgg struct {
+		Total  int64
+		Online int64
+	}
 	h.db.Model(&model.User{}).Count(&userCount)
-	h.db.Model(&model.Peer{}).Count(&peerCount)
-	h.db.Model(&model.Peer{}).Where("last_online_at >= ?", cutoff).Count(&onlinePeerCount)
+	h.db.Model(&model.Peer{}).
+		Select("COUNT(*) as total, COALESCE(SUM(CASE WHEN last_online_at >= ? THEN 1 ELSE 0 END), 0) as online", cutoff).
+		Scan(&peerAgg)
 	h.db.Model(&model.AddressBookCollection{}).Count(&abCount)
 	h.db.Model(&model.AuditConn{}).Where("created_at >= ?", dayAgo).Count(&connCount)
 	h.db.Model(&model.LoginLog{}).Where("created_at >= ?", dayAgo).Count(&loginCount)
@@ -282,12 +290,12 @@ func (h *AdminAuthHandler) Dashboard(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"stats": gin.H{
-			"users":            userCount,
-			"peers":            peerCount,
-			"online_peers":     onlinePeerCount,
-			"address_books":    abCount,
-			"conns_24h":        connCount,
-			"logins_24h":       loginCount,
+			"users":         userCount,
+			"peers":         peerAgg.Total,
+			"online_peers":  peerAgg.Online,
+			"address_books": abCount,
+			"conns_24h":     connCount,
+			"logins_24h":    loginCount,
 		},
 		"server_config": cfgInfo,
 		"recent_conns":  recentConns,

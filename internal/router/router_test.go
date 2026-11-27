@@ -2,10 +2,12 @@ package router_test
 
 import (
 	"bytes"
+	"compress/gzip"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -47,9 +49,21 @@ func setupTestServer(t *testing.T) (http.Handler, *gorm.DB) {
 		RustDeskIDServer:    "rd.example.com:21116",
 		RustDeskRelayServer: "rd.example.com:21117",
 		RustDeskAPIServer:   "https://rd.example.com",
-		RustDeskKeyFile:     keyPath,
-		HBBSWSTarget:        "http://127.0.0.1:21118",
-		HBBRWSTarget:        "http://127.0.0.1:21119",
+		RustDeskKeyFile:           keyPath,
+		HBBSWSTarget:              "http://127.0.0.1:21118",
+		HBBRWSTarget:              "http://127.0.0.1:21119",
+		ClientStrategyEnabled:     true,
+		ClientDefaultImageQuality: "custom",
+		ClientDefaultFPS:          60,
+		ClientDefaultQuality:      75,
+		ClientDefaultCodec:        "auto",
+		ClientEnableHWCodec:       true,
+		ClientEnableAudio:         true,
+		ClientEnableClipboard:     true,
+		ClientEnableFileTransfer:  true,
+		ClientEnableKeyboard:      true,
+		ClientEnableTunnel:        true,
+		ClientEnableRemoteRestart: true,
 	}
 
 	db, err := database.Init(cfg)
@@ -529,5 +543,92 @@ func TestClientStrategyHeartbeatPush(t *testing.T) {
 	})
 	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"strategy"`) {
 		t.Fatalf("expected synced heartbeat without strategy push, got (%d): %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestPerformanceCachesAndCompression(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	// 1. Pre-compressed embedded Web Admin static asset with ETag & 304 Not Modified
+	req := httptest.NewRequest(http.MethodGet, "/_admin/app.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /_admin/app.js, got %d", rec.Code)
+	}
+	if rec.Header().Get("Content-Encoding") != "gzip" {
+		t.Fatalf("expected gzip Content-Encoding on /_admin/app.js, got %q", rec.Header().Get("Content-Encoding"))
+	}
+	etag := rec.Header().Get("ETag")
+	if etag == "" {
+		t.Fatalf("expected ETag header on /_admin/app.js")
+	}
+	gzReader, err := gzip.NewReader(bytes.NewReader(rec.Body.Bytes()))
+	if err != nil {
+		t.Fatalf("open gzip reader for app.js: %v", err)
+	}
+	rawJS, err := io.ReadAll(gzReader)
+	_ = gzReader.Close()
+	if err != nil || !strings.Contains(string(rawJS), "renderStrategy") {
+		t.Fatalf("unexpected gunzipped app.js content (%v)", err)
+	}
+
+	req304 := httptest.NewRequest(http.MethodGet, "/_admin/app.js", nil)
+	req304.Header.Set("If-None-Match", etag)
+	rec304 := httptest.NewRecorder()
+	srv.ServeHTTP(rec304, req304)
+	if rec304.Code != http.StatusNotModified {
+		t.Fatalf("expected 304 Not Modified with matching ETag, got %d", rec304.Code)
+	}
+
+	// 2. API gzip compression + Auth token cache hit & immediate revocation
+	rec = doJSON(t, srv, http.MethodPost, "/api/login", "", map[string]interface{}{
+		"username": "admin",
+		"password": "AdminPass123!",
+		"id":       "700800900",
+		"uuid":     "uuid-perf-cache",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("login failed (%d): %s", rec.Code, rec.Body.String())
+	}
+	var loginResp struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &loginResp)
+	token := loginResp.AccessToken
+
+	dashReq := httptest.NewRequest(http.MethodGet, "/admin/api/dashboard", nil)
+	dashReq.Header.Set("Authorization", "Bearer "+token)
+	dashReq.Header.Set("Accept-Encoding", "gzip")
+	dashRec := httptest.NewRecorder()
+	srv.ServeHTTP(dashRec, dashReq)
+	if dashRec.Code != http.StatusOK {
+		t.Fatalf("dashboard failed (%d): %s", dashRec.Code, dashRec.Body.String())
+	}
+	if dashRec.Header().Get("Content-Encoding") == "gzip" {
+		zr, zErr := gzip.NewReader(bytes.NewReader(dashRec.Body.Bytes()))
+		if zErr != nil {
+			t.Fatalf("gunzip dashboard: %v", zErr)
+		}
+		plainDash, rErr := io.ReadAll(zr)
+		_ = zr.Close()
+		if rErr != nil || !strings.Contains(string(plainDash), `"server_config"`) {
+			t.Fatalf("unexpected gunzipped dashboard payload (%v)", rErr)
+		}
+	}
+
+	// Second call hits AuthService 15s token cache, then logout immediately invalidates it
+	rec = doJSON(t, srv, http.MethodGet, "/api/currentUser", token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("expected cached token auth 200, got %d", rec.Code)
+	}
+	rec = doJSON(t, srv, http.MethodPost, "/api/logout", token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("logout failed (%d)", rec.Code)
+	}
+	rec = doJSON(t, srv, http.MethodGet, "/api/currentUser", token, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("expected immediate 401 after logout cache eviction, got %d", rec.Code)
 	}
 }

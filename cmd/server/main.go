@@ -31,7 +31,12 @@ func main() {
 		Addr:              cfg.ListenAddr(),
 		Handler:           engine,
 		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 	}
+
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	database.StartCleanupLoop(bgCtx, db)
 
 	go func() {
 		log.Printf("RustDesk API Server v%s listening on %s (DB: %s)", cfg.AppVersion, cfg.ListenAddr(), cfg.DBType)
@@ -45,9 +50,13 @@ func main() {
 	<-quit
 
 	log.Println("Shutting down RustDesk API Server...")
+	bgCancel()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := srv.Shutdown(ctx); err != nil {
 		log.Printf("forced shutdown: %v", err)
+	}
+	if sqlDB, err := db.DB(); err == nil {
+		_ = sqlDB.Close()
 	}
 }

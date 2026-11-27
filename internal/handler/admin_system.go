@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -18,11 +17,12 @@ const secretMask = "********"
 
 // AdminSystemHandler manages OAuth providers, LDAP settings, SMTP settings, server keys/config, and official RustDesk update checks.
 type AdminSystemHandler struct {
-	db        *gorm.DB
-	authSvc   *service.AuthService
-	keySvc    *service.KeyService
-	updateSvc *service.UpdateService
-	emailSvc  *service.EmailService
+	db          *gorm.DB
+	authSvc     *service.AuthService
+	keySvc      *service.KeyService
+	updateSvc   *service.UpdateService
+	emailSvc    *service.EmailService
+	strategySvc *service.StrategyService
 }
 
 // NewAdminSystemHandler creates a new AdminSystemHandler.
@@ -32,13 +32,15 @@ func NewAdminSystemHandler(
 	keySvc *service.KeyService,
 	updateSvc *service.UpdateService,
 	emailSvc *service.EmailService,
+	strategySvc *service.StrategyService,
 ) *AdminSystemHandler {
 	return &AdminSystemHandler{
-		db:        db,
-		authSvc:   authSvc,
-		keySvc:    keySvc,
-		updateSvc: updateSvc,
-		emailSvc:  emailSvc,
+		db:          db,
+		authSvc:     authSvc,
+		keySvc:      keySvc,
+		updateSvc:   updateSvc,
+		emailSvc:    emailSvc,
+		strategySvc: strategySvc,
 	}
 }
 
@@ -481,33 +483,14 @@ type clientStrategyReq struct {
 
 // GetClientStrategy returns the singleton RustDesk client default strategy and generated config_options.
 func (h *AdminSystemHandler) GetClientStrategy(c *gin.Context) {
-	var strat model.ClientStrategy
-	err := h.db.Order("id asc").First(&strat).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		strat = model.ClientStrategy{
-			Enabled:             true,
-			ImageQuality:        "custom",
-			CustomFPS:           60,
-			CustomImageQuality:  75,
-			CodecPreference:     "auto",
-			EnableHWCodec:       true,
-			EnableAudio:         true,
-			EnableClipboard:     true,
-			EnableFileTransfer:  true,
-			EnableKeyboard:      true,
-			EnableTunnel:        true,
-			EnableRemoteRestart: true,
-			StrategyModifiedAt:  time.Now().Unix(),
-		}
-		strat.Normalize()
-	} else if err != nil {
+	snap, err := h.strategySvc.Reload()
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "load client strategy failed"})
 		return
 	}
-
 	c.JSON(http.StatusOK, gin.H{
-		"strategy":       strat,
-		"config_options": strat.ToConfigOptions(),
+		"strategy":       snap.Strategy,
+		"config_options": snap.ConfigOptions,
 	})
 }
 
@@ -538,63 +521,20 @@ func (h *AdminSystemHandler) UpdateClientStrategy(c *gin.Context) {
 		ApproveMode:         req.ApproveMode,
 		ExtraOptions:        req.ExtraOptions,
 	}
-	candidate.Normalize()
-	if _, err := candidate.ParseExtraOptions(); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
-		return
-	}
 
-	nowUnix := time.Now().Unix()
-	var existing model.ClientStrategy
-	err := h.db.Order("id asc").First(&existing).Error
-	if errors.Is(err, gorm.ErrRecordNotFound) {
-		candidate.StrategyModifiedAt = nowUnix
-		if err := h.db.Create(&candidate).Error; err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "save client strategy failed"})
+	snap, err := h.strategySvc.Update(candidate)
+	if err != nil {
+		if errors.Is(err, service.ErrInvalidStrategyOptions) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"message":        "saved",
-			"strategy":       candidate,
-			"config_options": candidate.ToConfigOptions(),
-		})
-		return
-	}
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": "load client strategy failed"})
-		return
-	}
-
-	if nowUnix <= existing.StrategyModifiedAt {
-		nowUnix = existing.StrategyModifiedAt + 1
-	}
-
-	existing.Enabled = candidate.Enabled
-	existing.ImageQuality = candidate.ImageQuality
-	existing.CustomFPS = candidate.CustomFPS
-	existing.CustomImageQuality = candidate.CustomImageQuality
-	existing.CodecPreference = candidate.CodecPreference
-	existing.EnableHWCodec = candidate.EnableHWCodec
-	existing.EnableAudio = candidate.EnableAudio
-	existing.EnableClipboard = candidate.EnableClipboard
-	existing.EnableFileTransfer = candidate.EnableFileTransfer
-	existing.EnableKeyboard = candidate.EnableKeyboard
-	existing.EnableTunnel = candidate.EnableTunnel
-	existing.EnableRemoteRestart = candidate.EnableRemoteRestart
-	existing.EnableRecordSession = candidate.EnableRecordSession
-	existing.DirectServer = candidate.DirectServer
-	existing.VerificationMethod = candidate.VerificationMethod
-	existing.ApproveMode = candidate.ApproveMode
-	existing.ExtraOptions = candidate.ExtraOptions
-	existing.StrategyModifiedAt = nowUnix
-
-	if err := h.db.Save(&existing).Error; err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "update client strategy failed"})
 		return
 	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"message":        "saved",
-		"strategy":       existing,
-		"config_options": existing.ToConfigOptions(),
+		"strategy":       snap.Strategy,
+		"config_options": snap.ConfigOptions,
 	})
 }

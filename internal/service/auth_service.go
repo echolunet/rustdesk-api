@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -31,15 +32,29 @@ type Claims struct {
 	jwt.RegisteredClaims
 }
 
+type cachedTokenEntry struct {
+	user           model.User
+	tokenExpiresAt time.Time
+	cacheExpiresAt time.Time
+}
+
 // AuthService handles password hashing, JWT issuance/validation, and LDAP authentication.
 type AuthService struct {
-	db  *gorm.DB
-	cfg *config.Config
+	db         *gorm.DB
+	cfg        *config.Config
+	jwtSecret  []byte
+	cacheMu    sync.RWMutex
+	tokenCache map[string]cachedTokenEntry
 }
 
 // NewAuthService creates a new AuthService.
 func NewAuthService(db *gorm.DB, cfg *config.Config) *AuthService {
-	return &AuthService{db: db, cfg: cfg}
+	return &AuthService{
+		db:         db,
+		cfg:        cfg,
+		jwtSecret:  []byte(cfg.JWTSecret),
+		tokenCache: make(map[string]cachedTokenEntry, 256),
+	}
 }
 
 // HashPassword hashes a plaintext password using bcrypt.
@@ -97,7 +112,7 @@ func (s *AuthService) IssueToken(user *model.User, deviceID, deviceUUID, ip stri
 	}
 
 	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
-	signed, err := token.SignedString([]byte(s.cfg.JWTSecret))
+	signed, err := token.SignedString(s.jwtSecret)
 	if err != nil {
 		return "", err
 	}
@@ -132,17 +147,26 @@ func (s *AuthService) ValidateToken(tokenStr string) (*model.User, string, error
 		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 			return nil, fmt.Errorf("unexpected signing method: %v", token.Header["alg"])
 		}
-		return []byte(s.cfg.JWTSecret), nil
+		return s.jwtSecret, nil
 	})
 	if err != nil || !parsed.Valid || claims.ID == "" {
 		return nil, "", ErrInvalidToken
+	}
+
+	now := time.Now()
+	s.cacheMu.RLock()
+	entry, ok := s.tokenCache[claims.ID]
+	s.cacheMu.RUnlock()
+	if ok && now.Before(entry.cacheExpiresAt) && now.Before(entry.tokenExpiresAt) && entry.user.Status == 1 {
+		userCopy := entry.user
+		return &userCopy, claims.ID, nil
 	}
 
 	var tokenRow model.UserToken
 	if err := s.db.Where("token_id = ? AND revoked = ?", claims.ID, false).First(&tokenRow).Error; err != nil {
 		return nil, "", ErrInvalidToken
 	}
-	if time.Now().After(tokenRow.ExpiresAt) {
+	if now.After(tokenRow.ExpiresAt) {
 		return nil, "", ErrInvalidToken
 	}
 
@@ -154,20 +178,63 @@ func (s *AuthService) ValidateToken(tokenStr string) (*model.User, string, error
 		return nil, "", ErrUserDisabled
 	}
 
+	s.cacheMu.Lock()
+	if len(s.tokenCache) >= 4096 {
+		for k, v := range s.tokenCache {
+			if !now.Before(v.cacheExpiresAt) || !now.Before(v.tokenExpiresAt) {
+				delete(s.tokenCache, k)
+			}
+		}
+		if len(s.tokenCache) >= 4096 {
+			s.tokenCache = make(map[string]cachedTokenEntry, 256)
+		}
+	}
+	s.tokenCache[claims.ID] = cachedTokenEntry{
+		user:           user,
+		tokenExpiresAt: tokenRow.ExpiresAt,
+		cacheExpiresAt: now.Add(15 * time.Second),
+	}
+	s.cacheMu.Unlock()
+
 	return &user, claims.ID, nil
 }
 
-// RevokeToken marks a specific JWT session token as revoked.
+// RevokeToken marks a specific JWT session token as revoked and evicts its cache entry.
 func (s *AuthService) RevokeToken(jti string) error {
 	if jti == "" {
 		return nil
 	}
+	s.cacheMu.Lock()
+	delete(s.tokenCache, jti)
+	s.cacheMu.Unlock()
 	return s.db.Model(&model.UserToken{}).Where("token_id = ?", jti).Update("revoked", true).Error
 }
 
-// RevokeUserTokens revokes all active tokens belonging to a user.
+// RevokeUserTokens revokes all active tokens belonging to a user and evicts cached sessions.
 func (s *AuthService) RevokeUserTokens(userID uint) error {
+	s.InvalidateUserCache(userID)
 	return s.db.Model(&model.UserToken{}).Where("user_id = ? AND revoked = ?", userID, false).Update("revoked", true).Error
+}
+
+// InvalidateUserCache removes all cached token entries associated with userID.
+func (s *AuthService) InvalidateUserCache(userID uint) {
+	if userID == 0 {
+		return
+	}
+	s.cacheMu.Lock()
+	for jti, entry := range s.tokenCache {
+		if entry.user.ID == userID {
+			delete(s.tokenCache, jti)
+		}
+	}
+	s.cacheMu.Unlock()
+}
+
+// ClearUserCache clears the entire in-memory token validation cache.
+func (s *AuthService) ClearUserCache() {
+	s.cacheMu.Lock()
+	s.tokenCache = make(map[string]cachedTokenEntry, 256)
+	s.cacheMu.Unlock()
 }
 
 // AuthenticateLocal verifies username and password against local database users.

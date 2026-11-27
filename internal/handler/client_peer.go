@@ -4,6 +4,7 @@ import (
 	"errors"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -12,18 +13,35 @@ import (
 	"rustdesk-api/internal/config"
 	"rustdesk-api/internal/middleware"
 	"rustdesk-api/internal/model"
+	"rustdesk-api/internal/service"
 )
+
+type peerTouchRecord struct {
+	uuid      string
+	ver       string
+	ip        string
+	lastWrite int64
+}
 
 // ClientPeerHandler serves heartbeat, sysinfo, peers, users, and accessible device group endpoints.
 type ClientPeerHandler struct {
-	db        *gorm.DB
-	cfg       *config.Config
-	startTime int64
+	db          *gorm.DB
+	cfg         *config.Config
+	strategySvc *service.StrategyService
+	startTime   int64
+	touchMu     sync.RWMutex
+	touchCache  map[string]peerTouchRecord
 }
 
 // NewClientPeerHandler creates a new ClientPeerHandler.
-func NewClientPeerHandler(db *gorm.DB, cfg *config.Config, startTime int64) *ClientPeerHandler {
-	return &ClientPeerHandler{db: db, cfg: cfg, startTime: startTime}
+func NewClientPeerHandler(db *gorm.DB, cfg *config.Config, strategySvc *service.StrategyService, startTime int64) *ClientPeerHandler {
+	return &ClientPeerHandler{
+		db:          db,
+		cfg:         cfg,
+		strategySvc: strategySvc,
+		startTime:   startTime,
+		touchCache:  make(map[string]peerTouchRecord, 256),
+	}
 }
 
 type heartbeatRequest struct {
@@ -43,61 +61,104 @@ func (h *ClientPeerHandler) Heartbeat(c *gin.Context) {
 
 	peerID := strings.TrimSpace(req.ID)
 	uuidVal := strings.TrimSpace(req.UUID)
+	verStr := req.Ver.String()
+	clientIP := c.ClientIP()
 	now := time.Now()
+	nowUnix := now.Unix()
 
 	if peerID != "" {
-		var peer model.Peer
-		err := h.db.Where("peer_id = ?", peerID).First(&peer).Error
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			h.db.Create(&model.Peer{
-				PeerID:       peerID,
-				UUID:         uuidVal,
-				Version:      req.Ver.String(),
-				LastIP:       c.ClientIP(),
-				LastOnlineAt: &now,
-			})
-		} else if err == nil {
-			if peer.UUID == "" || uuidVal == "" || peer.UUID == uuidVal {
-				updates := map[string]interface{}{
-					"last_online_at": &now,
-					"last_ip":        c.ClientIP(),
+		skipDB := false
+		h.touchMu.RLock()
+		rec, ok := h.touchCache[peerID]
+		h.touchMu.RUnlock()
+		if ok && nowUnix-rec.lastWrite < 30 && rec.uuid == uuidVal && rec.ver == verStr && rec.ip == clientIP {
+			skipDB = true
+		}
+
+		if !skipDB {
+			var peer model.Peer
+			err := h.db.Where("peer_id = ?", peerID).First(&peer).Error
+			if errors.Is(err, gorm.ErrRecordNotFound) {
+				if createErr := h.db.Create(&model.Peer{
+					PeerID:       peerID,
+					UUID:         uuidVal,
+					Version:      verStr,
+					LastIP:       clientIP,
+					LastOnlineAt: &now,
+				}).Error; createErr == nil {
+					h.recordPeerTouch(peerID, uuidVal, verStr, clientIP, nowUnix)
 				}
-				if peer.UUID == "" && uuidVal != "" {
-					updates["uuid"] = uuidVal
+			} else if err == nil {
+				if peer.UUID == "" || uuidVal == "" || peer.UUID == uuidVal {
+					updates := map[string]interface{}{
+						"last_online_at": &now,
+						"last_ip":        clientIP,
+					}
+					if peer.UUID == "" && uuidVal != "" {
+						updates["uuid"] = uuidVal
+					}
+					if verStr != "" {
+						updates["version"] = verStr
+					}
+					if h.db.Model(&peer).Updates(updates).Error == nil {
+						effUUID := peer.UUID
+						if effUUID == "" {
+							effUUID = uuidVal
+						}
+						effVer := peer.Version
+						if verStr != "" {
+							effVer = verStr
+						}
+						h.recordPeerTouch(peerID, effUUID, effVer, clientIP, nowUnix)
+					}
 				}
-				if req.Ver.String() != "" {
-					updates["version"] = req.Ver.String()
-				}
-				h.db.Model(&peer).Updates(updates)
 			}
 		}
 	}
 
-	var strat model.ClientStrategy
-	if err := h.db.Order("id asc").First(&strat).Error; err == nil && strat.Enabled {
-		modUnix := strat.StrategyModifiedAt
-		if modUnix <= 0 {
-			modUnix = now.Unix()
-		}
-		if req.ModifiedAt == 0 || req.ModifiedAt < modUnix {
+	if h.strategySvc != nil {
+		if snap := h.strategySvc.GetSnapshot(); snap != nil && snap.Strategy.Enabled {
+			if req.ModifiedAt == 0 || req.ModifiedAt < snap.ModifiedAt {
+				c.JSON(http.StatusOK, gin.H{
+					"modified_at": snap.ModifiedAt,
+					"disconnect":  []string{},
+					"strategy": gin.H{
+						"config_options": snap.ConfigOptions,
+					},
+				})
+				return
+			}
 			c.JSON(http.StatusOK, gin.H{
-				"modified_at": modUnix,
-				"disconnect":  []string{},
-				"strategy": gin.H{
-					"config_options": strat.ToConfigOptions(),
-				},
+				"modified_at": snap.ModifiedAt,
 			})
 			return
 		}
-		c.JSON(http.StatusOK, gin.H{
-			"modified_at": modUnix,
-		})
-		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"modified_at": now.Unix(),
+		"modified_at": nowUnix,
 	})
+}
+
+func (h *ClientPeerHandler) recordPeerTouch(peerID, uuidVal, verStr, ip string, nowUnix int64) {
+	h.touchMu.Lock()
+	if len(h.touchCache) >= 20000 {
+		for k, v := range h.touchCache {
+			if nowUnix-v.lastWrite > 60 {
+				delete(h.touchCache, k)
+			}
+		}
+		if len(h.touchCache) >= 20000 {
+			h.touchCache = make(map[string]peerTouchRecord, 256)
+		}
+	}
+	h.touchCache[peerID] = peerTouchRecord{
+		uuid:      uuidVal,
+		ver:       verStr,
+		ip:        ip,
+		lastWrite: nowUnix,
+	}
+	h.touchMu.Unlock()
 }
 
 type sysinfoRequest struct {
@@ -146,6 +207,7 @@ func (h *ClientPeerHandler) Sysinfo(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to save sysinfo"})
 			return
 		}
+		h.recordPeerTouch(peerID, uuidVal, peer.Version, c.ClientIP(), now.Unix())
 		c.String(http.StatusOK, "SYSINFO_UPDATED")
 		return
 	}
@@ -172,7 +234,13 @@ func (h *ClientPeerHandler) Sysinfo(c *gin.Context) {
 	if req.Version.String() != "" {
 		updates["version"] = req.Version.String()
 	}
-	h.db.Model(&peer).Updates(updates)
+	if h.db.Model(&peer).Updates(updates).Error == nil {
+		verVal := peer.Version
+		if req.Version.String() != "" {
+			verVal = req.Version.String()
+		}
+		h.recordPeerTouch(peerID, uuidVal, verVal, c.ClientIP(), now.Unix())
+	}
 	c.String(http.StatusOK, "SYSINFO_UPDATED")
 }
 

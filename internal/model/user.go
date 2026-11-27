@@ -38,12 +38,12 @@ type User struct {
 type UserToken struct {
 	ID         uint      `gorm:"primaryKey" json:"id"`
 	TokenID    string    `gorm:"size:64;uniqueIndex;not null" json:"token_id"`
-	UserID     uint      `gorm:"index;not null" json:"user_id"`
+	UserID     uint      `gorm:"index;index:idx_user_tokens_uid_revoked;not null" json:"user_id"`
 	Username   string    `gorm:"size:128" json:"username"`
 	DeviceID   string    `gorm:"size:64;index" json:"device_id"`
 	DeviceUUID string    `gorm:"size:128;index" json:"device_uuid"`
 	IP         string    `gorm:"size:64" json:"ip"`
 	ExpiresAt  time.Time `gorm:"index" json:"expires_at"`
-	Revoked    bool      `gorm:"default:false;index" json:"revoked"`
+	Revoked    bool      `gorm:"default:false;index;index:idx_user_tokens_uid_revoked" json:"revoked"`
 	CreatedAt  time.Time `json:"created_at"`
 }

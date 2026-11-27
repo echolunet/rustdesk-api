@@ -193,6 +193,8 @@ func (h *AdminUserHandler) UpdateUser(c *gin.Context) {
 	}
 	if req.Status != nil && *req.Status == 0 {
 		_ = h.authSvc.RevokeUserTokens(user.ID)
+	} else {
+		h.authSvc.InvalidateUserCache(user.ID)
 	}
 	_ = h.db.First(&user, user.ID).Error
 	c.JSON(http.StatusOK, user)
@@ -241,6 +243,7 @@ func (h *AdminUserHandler) ResetUser2FA(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "failed to reset user 2FA"})
 		return
 	}
+	h.authSvc.InvalidateUserCache(uint(id))
 	c.JSON(http.StatusOK, gin.H{"message": "user 2FA reset"})
 }
 
@@ -298,6 +301,7 @@ func (h *AdminUserHandler) UpdateGroup(c *gin.Context) {
 		return
 	}
 	h.db.Model(&model.User{}).Where("group_id = ?", grp.ID).Update("group_name", name)
+	h.authSvc.ClearUserCache()
 	c.JSON(http.StatusOK, grp)
 }
 
@@ -327,6 +331,7 @@ func (h *AdminUserHandler) DeleteGroup(c *gin.Context) {
 	h.db.Where("group_id = ?", grp.ID).Delete(&model.AddressBookRule{})
 	h.db.Where("user_group_id = ?", grp.ID).Delete(&model.DeviceGroupAccess{})
 	h.db.Delete(&grp)
+	h.authSvc.ClearUserCache()
 	c.JSON(http.StatusOK, gin.H{"message": "deleted"})
 }
 

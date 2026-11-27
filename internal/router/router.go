@@ -1,6 +1,10 @@
 package router
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
 	"io/fs"
 	"mime"
 	"net/http"
@@ -25,7 +29,7 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	}
 
 	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS())
+	r.Use(gin.Logger(), gin.Recovery(), middleware.CORS(), middleware.Gzip())
 
 	startTime := time.Now().Unix()
 
@@ -36,10 +40,11 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	updateSvc := service.NewUpdateService()
 	totpSvc := service.NewTOTPService(db)
 	emailSvc := service.NewEmailService(db)
+	strategySvc := service.NewStrategyService(db)
 
 	clientAuthH := handler.NewClientAuthHandler(db, authSvc, oauthSvc, totpSvc, emailSvc)
 	clientOAuthH := handler.NewClientOAuthHandler(authSvc, oauthSvc)
-	clientPeerH := handler.NewClientPeerHandler(db, cfg, startTime)
+	clientPeerH := handler.NewClientPeerHandler(db, cfg, strategySvc, startTime)
 	clientABH := handler.NewClientABHandler(db, cfg, abSvc)
 	clientAuditH := handler.NewClientAuditHandler(db)
 	proxyWCH := handler.NewProxyWebClientHandler(cfg, keySvc)
@@ -49,7 +54,7 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	adminDeviceH := handler.NewAdminDeviceHandler(db)
 	adminABH := handler.NewAdminABHandler(db)
 	adminAuditH := handler.NewAdminAuditHandler(db)
-	adminSysH := handler.NewAdminSystemHandler(db, authSvc, keySvc, updateSvc, emailSvc)
+	adminSysH := handler.NewAdminSystemHandler(db, authSvc, keySvc, updateSvc, emailSvc, strategySvc)
 
 	authMW := middleware.AuthRequired(authSvc)
 	adminMW := middleware.AdminRequired()
@@ -220,10 +225,61 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	return r
 }
 
+type embeddedAsset struct {
+	raw         []byte
+	gz          []byte
+	etag        string
+	contentType string
+	cacheCtrl   string
+}
+
 func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
+	assets := make(map[string]embeddedAsset, 8)
+	_ = fs.WalkDir(subFS, ".", func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		raw, readErr := fs.ReadFile(subFS, path)
+		if readErr != nil {
+			return nil
+		}
+		ctype := mime.TypeByExtension(filepath.Ext(path))
+		if ctype == "" {
+			ctype = http.DetectContentType(raw)
+		}
+		sum := sha256.Sum256(raw)
+		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
+		cacheCtrl := "public, max-age=3600"
+		if path == "index.html" {
+			cacheCtrl = "no-cache"
+		}
+
+		var gzBytes []byte
+		if len(raw) >= 256 {
+			ext := strings.ToLower(filepath.Ext(path))
+			if ext == ".html" || ext == ".js" || ext == ".css" || ext == ".svg" || ext == ".json" {
+				var buf bytes.Buffer
+				if gw, gwErr := gzip.NewWriterLevel(&buf, gzip.BestCompression); gwErr == nil {
+					_, _ = gw.Write(raw)
+					if gw.Close() == nil && buf.Len() < len(raw) {
+						gzBytes = buf.Bytes()
+					}
+				}
+			}
+		}
+
+		assets[path] = embeddedAsset{
+			raw:         raw,
+			gz:          gzBytes,
+			etag:        etag,
+			contentType: ctype,
+			cacheCtrl:   cacheCtrl,
+		}
+		return nil
+	})
+
 	return func(c *gin.Context) {
-		p := strings.TrimPrefix(c.Param("filepath"), "/")
-		p = strings.TrimSpace(p)
+		p := strings.TrimSpace(strings.TrimPrefix(c.Param("filepath"), "/"))
 		if p == "" {
 			p = "index.html"
 		}
@@ -231,20 +287,30 @@ func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
 			c.Status(http.StatusForbidden)
 			return
 		}
-		data, err := fs.ReadFile(subFS, p)
-		if err != nil {
-			p = "index.html"
-			data, err = fs.ReadFile(subFS, p)
-			if err != nil {
+
+		asset, ok := assets[p]
+		if !ok {
+			asset, ok = assets["index.html"]
+			if !ok {
 				c.Status(http.StatusNotFound)
 				return
 			}
 		}
 
-		ctype := mime.TypeByExtension(filepath.Ext(p))
-		if ctype == "" {
-			ctype = http.DetectContentType(data)
+		c.Header("ETag", asset.etag)
+		c.Header("Cache-Control", asset.cacheCtrl)
+		if len(asset.gz) > 0 {
+			c.Header("Vary", "Accept-Encoding")
 		}
-		c.Data(http.StatusOK, ctype, data)
+		if match := c.GetHeader("If-None-Match"); match != "" && strings.Contains(match, asset.etag) {
+			c.Status(http.StatusNotModified)
+			return
+		}
+		if len(asset.gz) > 0 && strings.Contains(strings.ToLower(c.GetHeader("Accept-Encoding")), "gzip") {
+			c.Header("Content-Encoding", "gzip")
+			c.Data(http.StatusOK, asset.contentType, asset.gz)
+			return
+		}
+		c.Data(http.StatusOK, asset.contentType, asset.raw)
 	}
 }

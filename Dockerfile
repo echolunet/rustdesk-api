@@ -10,12 +10,19 @@ ENV GOPROXY=${GOPROXY} \
 WORKDIR /src
 
 COPY go.mod ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download || true
+
 COPY . .
 
-RUN go mod tidy && go build -trimpath -ldflags="-s -w" -o /out/rustdesk-api ./cmd/server
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go mod tidy && go build -trimpath -ldflags="-s -w" -o /out/rustdesk-api ./cmd/server
 
 FROM builder AS test
-RUN go test -v ./...
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go test -v ./...
 
 FROM alpine:3.21 AS runtime
 

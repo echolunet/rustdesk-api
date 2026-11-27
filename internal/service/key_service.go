@@ -6,6 +6,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/skip2/go-qrcode"
 
@@ -14,7 +16,14 @@ import (
 
 // KeyService reads the official hbbs Ed25519 public key and generates one-click RustDesk client configurations.
 type KeyService struct {
-	cfg *config.Config
+	cfg              *config.Config
+	mu               sync.RWMutex
+	cachedKey        string
+	cachedKeyModTime time.Time
+	cachedKeySize    int64
+	qrCacheKey       string
+	qrConfigString   string
+	qrDataURI        string
 }
 
 // NewKeyService creates a new KeyService.
@@ -43,6 +52,19 @@ func (s *KeyService) GetPublicKey() (string, string, bool) {
 	if s.cfg.RustDeskKey != "" {
 		return s.cfg.RustDeskKey, "env", true
 	}
+	info, err := os.Stat(s.cfg.RustDeskKeyFile)
+	if err != nil {
+		return "", "missing", false
+	}
+
+	s.mu.RLock()
+	if s.cachedKey != "" && info.Size() == s.cachedKeySize && info.ModTime().Equal(s.cachedKeyModTime) {
+		k := s.cachedKey
+		s.mu.RUnlock()
+		return k, "file", true
+	}
+	s.mu.RUnlock()
+
 	raw, err := os.ReadFile(s.cfg.RustDeskKeyFile)
 	if err != nil {
 		return "", "missing", false
@@ -51,6 +73,12 @@ func (s *KeyService) GetPublicKey() (string, string, bool) {
 	if trimmed == "" {
 		return "", "missing", false
 	}
+
+	s.mu.Lock()
+	s.cachedKey = trimmed
+	s.cachedKeySize = info.Size()
+	s.cachedKeyModTime = info.ModTime()
+	s.mu.Unlock()
 	return trimmed, "file", true
 }
 
@@ -73,6 +101,31 @@ func (s *KeyService) GetClientConfig(requestBaseURL string) ClientConfigInfo {
 		relayServer = hostOnly + ":21117"
 	}
 
+	cacheKey := idServer + "\x00" + relayServer + "\x00" + apiURL + "\x00" + key
+	s.mu.RLock()
+	if s.qrCacheKey == cacheKey && s.qrConfigString != "" {
+		configString := s.qrConfigString
+		qrDataURI := s.qrDataURI
+		s.mu.RUnlock()
+		cliCmd := "rustdesk --config \"" + configString + "\""
+		_, wcErr := os.Stat(filepath.Join(s.cfg.WebClientDir, "index.html"))
+		return ClientConfigInfo{
+			IDServer:       idServer,
+			RelayServer:    relayServer,
+			APIServer:      apiURL,
+			PublicKey:      key,
+			KeySource:      source,
+			KeyExists:      exists,
+			KeyFilePath:    s.cfg.RustDeskKeyFile,
+			ConfigString:   configString,
+			CLICommand:     cliCmd,
+			QRDataURI:      qrDataURI,
+			WebClientReady: wcErr == nil,
+			AppVersion:     s.cfg.AppVersion,
+		}
+	}
+	s.mu.RUnlock()
+
 	payload := map[string]string{
 		"host":  idServer,
 		"relay": relayServer,
@@ -90,6 +143,11 @@ func (s *KeyService) GetClientConfig(requestBaseURL string) ClientConfigInfo {
 		if png, err := qrcode.Encode("rustdesk://config/"+configString, qrcode.Medium, 220); err == nil {
 			qrDataURI = "data:image/png;base64," + base64.StdEncoding.EncodeToString(png)
 		}
+		s.mu.Lock()
+		s.qrCacheKey = cacheKey
+		s.qrConfigString = configString
+		s.qrDataURI = qrDataURI
+		s.mu.Unlock()
 	}
 
 	_, wcErr := os.Stat(filepath.Join(s.cfg.WebClientDir, "index.html"))

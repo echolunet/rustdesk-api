@@ -298,31 +298,42 @@ func (s *ABService) ImportLegacyAB(user *model.User, rawData string) error {
 			return err
 		}
 
+		newTags := make([]model.AddressBookTag, 0, len(body.Tags))
+		seenTags := make(map[string]struct{}, len(body.Tags))
 		for _, tagName := range body.Tags {
 			tagName = strings.TrimSpace(tagName)
 			if tagName == "" {
 				continue
 			}
+			if _, ok := seenTags[tagName]; ok {
+				continue
+			}
+			seenTags[tagName] = struct{}{}
 			colorVal := colorMap[tagName]
 			if colorVal == 0 {
 				colorVal = 4280391411
 			}
-			if err := tx.Create(&model.AddressBookTag{
+			newTags = append(newTags, model.AddressBookTag{
 				CollectionGUID: col.GUID,
 				Name:           tagName,
 				Color:          colorVal,
-			}).Error; err != nil {
+			})
+		}
+		if len(newTags) > 0 {
+			if err := tx.CreateInBatches(&newTags, 100).Error; err != nil {
 				return err
 			}
 		}
 
+		newPeers := make([]model.AddressBookPeer, 0, len(body.Peers))
 		for _, p := range body.Peers {
-			if strings.TrimSpace(p.ID) == "" {
+			pid := strings.TrimSpace(p.ID)
+			if pid == "" {
 				continue
 			}
-			if err := tx.Create(&model.AddressBookPeer{
+			newPeers = append(newPeers, model.AddressBookPeer{
 				CollectionGUID:   col.GUID,
-				PeerID:           strings.TrimSpace(p.ID),
+				PeerID:           pid,
 				Username:         p.Username,
 				Hostname:         p.Hostname,
 				Alias:            p.Alias,
@@ -333,7 +344,10 @@ func (s *ABService) ImportLegacyAB(user *model.User, rawData string) error {
 				ForceAlwaysRelay: p.ForceAlwaysRelay,
 				RDPPort:          p.RDPPort,
 				RDPUsername:      p.RDPUsername,
-			}).Error; err != nil {
+			})
+		}
+		if len(newPeers) > 0 {
+			if err := tx.CreateInBatches(&newPeers, 100).Error; err != nil {
 				return err
 			}
 		}

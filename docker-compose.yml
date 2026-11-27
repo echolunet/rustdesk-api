@@ -2,6 +2,12 @@ networks:
   rustdesk-net:
     driver: bridge
 
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   hbbs:
     image: ${RUSTDESK_SERVER_IMAGE:-rustdesk/rustdesk-server:latest}
@@ -17,6 +23,7 @@ services:
       - "21118:21118"
     networks:
       - rustdesk-net
+    logging: *default-logging
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -32,6 +39,7 @@ services:
       - "21119:21119"
     networks:
       - rustdesk-net
+    logging: *default-logging
     labels:
       - "com.centurylinklabs.watchtower.enable=true"
 
@@ -88,6 +96,7 @@ services:
       - ./data/webclient:/app/webclient
     networks:
       - rustdesk-net
+    logging: *default-logging
     labels:
       - "com.centurylinklabs.watchtower.enable=false"
     healthcheck:
@@ -114,6 +123,7 @@ services:
       - ./nginx/ssl:/etc/nginx/ssl:ro
     networks:
       - rustdesk-net
+    logging: *default-logging
 
   watchtower:
     image: containrrr/watchtower:latest
@@ -125,3 +135,4 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     networks:
       - rustdesk-net
+    logging: *default-logging

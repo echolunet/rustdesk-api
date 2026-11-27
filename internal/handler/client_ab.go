@@ -234,14 +234,60 @@ func (h *ClientABHandler) AddPeers(c *gin.Context) {
 	}
 
 	err = h.db.Transaction(func(tx *gorm.DB) error {
+		peerIDs := make([]string, 0, len(items))
+		seenReqIDs := make(map[string]struct{}, len(items))
+		tagNameSet := make(map[string]struct{})
+		for _, item := range items {
+			pid := item.resolvedID()
+			if pid != "" {
+				if _, ok := seenReqIDs[pid]; !ok {
+					seenReqIDs[pid] = struct{}{}
+					peerIDs = append(peerIDs, pid)
+				}
+			}
+			for _, t := range item.Tags {
+				tn := strings.TrimSpace(t)
+				if tn != "" {
+					tagNameSet[tn] = struct{}{}
+				}
+			}
+		}
+		if len(peerIDs) == 0 {
+			return nil
+		}
+
+		var existingPeers []model.AddressBookPeer
+		if err := tx.Where("collection_guid = ? AND peer_id IN ?", guid, peerIDs).Find(&existingPeers).Error; err != nil {
+			return err
+		}
+		existingPeerMap := make(map[string]model.AddressBookPeer, len(existingPeers))
+		for _, ep := range existingPeers {
+			existingPeerMap[ep.PeerID] = ep
+		}
+
+		existingTagSet := make(map[string]struct{}, len(tagNameSet))
+		if len(tagNameSet) > 0 {
+			tagList := make([]string, 0, len(tagNameSet))
+			for tn := range tagNameSet {
+				tagList = append(tagList, tn)
+			}
+			var existingTags []model.AddressBookTag
+			if err := tx.Where("collection_guid = ? AND name IN ?", guid, tagList).Find(&existingTags).Error; err != nil {
+				return err
+			}
+			for _, et := range existingTags {
+				existingTagSet[et.Name] = struct{}{}
+			}
+		}
+
+		toCreatePeers := make([]model.AddressBookPeer, 0, len(peerIDs))
+		pendingNewIdx := make(map[string]int, len(peerIDs))
 		for _, item := range items {
 			pid := item.resolvedID()
 			if pid == "" {
 				continue
 			}
-			var existing model.AddressBookPeer
-			findErr := tx.Where("collection_guid = ? AND peer_id = ?", guid, pid).First(&existing).Error
-			if findErr == nil {
+			if existing, ok := existingPeerMap[pid]; ok {
 				if err := tx.Model(&existing).Updates(map[string]interface{}{
 					"username":           item.Username,
 					"hostname":           item.Hostname,
@@ -259,7 +305,7 @@ func (h *ClientABHandler) AddPeers(c *gin.Context) {
 					return err
 				}
 			} else {
-				if err := tx.Create(&model.AddressBookPeer{
+				row := model.AddressBookPeer{
 					CollectionGUID:   guid,
 					PeerID:           pid,
 					Username:         item.Username,
@@ -274,24 +320,37 @@ func (h *ClientABHandler) AddPeers(c *gin.Context) {
 					RDPPort:          item.RDPPort,
 					RDPUsername:      item.RDPUsername,
 					SameServer:       item.SameServer,
-				}).Error; err != nil {
-					return err
+				}
+				if idx, dup := pendingNewIdx[pid]; dup {
+					toCreatePeers[idx] = row
+				} else {
+					pendingNewIdx[pid] = len(toCreatePeers)
+					toCreatePeers = append(toCreatePeers, row)
 				}
 			}
+		}
 
-			for _, tagName := range item.Tags {
-				tagName = strings.TrimSpace(tagName)
-				if tagName == "" {
+		if len(toCreatePeers) > 0 {
+			if err := tx.CreateInBatches(&toCreatePeers, 100).Error; err != nil {
+				return err
+			}
+		}
+
+		if len(tagNameSet) > len(existingTagSet) {
+			toCreateTags := make([]model.AddressBookTag, 0, len(tagNameSet)-len(existingTagSet))
+			for tn := range tagNameSet {
+				if _, ok := existingTagSet[tn]; ok {
 					continue
 				}
-				var cnt int64
-				tx.Model(&model.AddressBookTag{}).Where("collection_guid = ? AND name = ?", guid, tagName).Count(&cnt)
-				if cnt == 0 {
-					_ = tx.Create(&model.AddressBookTag{
-						CollectionGUID: guid,
-						Name:           tagName,
-						Color:          4280391411,
-					}).Error
+				toCreateTags = append(toCreateTags, model.AddressBookTag{
+					CollectionGUID: guid,
+					Name:           tn,
+					Color:          4280391411,
+				})
+			}
+			if len(toCreateTags) > 0 {
+				if err := tx.CreateInBatches(&toCreateTags, 100).Error; err != nil {
+					return err
 				}
 			}
 		}

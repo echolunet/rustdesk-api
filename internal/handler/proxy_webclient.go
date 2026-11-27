@@ -2,12 +2,15 @@ package handler
 
 import (
 	"html"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/gin-gonic/gin"
 
@@ -15,15 +18,59 @@ import (
 	"rustdesk-api/internal/service"
 )
 
+type wsBufferPool struct {
+	pool sync.Pool
+}
+
+func (p *wsBufferPool) Get() []byte {
+	return p.pool.Get().([]byte)
+}
+
+func (p *wsBufferPool) Put(b []byte) {
+	if cap(b) >= 32*1024 {
+		p.pool.Put(b[:32*1024])
+	}
+}
+
 // ProxyWebClientHandler serves WebSocket reverse proxying to hbbs/hbbr and hosts static RustDesk Web Client files.
 type ProxyWebClientHandler struct {
-	cfg    *config.Config
-	keySvc *service.KeyService
+	cfg          *config.Config
+	keySvc       *service.KeyService
+	webClientAbs string
+	wsTransport  *http.Transport
+	wsBufPool    *wsBufferPool
 }
 
 // NewProxyWebClientHandler creates a new ProxyWebClientHandler.
 func NewProxyWebClientHandler(cfg *config.Config, keySvc *service.KeyService) *ProxyWebClientHandler {
-	return &ProxyWebClientHandler{cfg: cfg, keySvc: keySvc}
+	abs, err := filepath.Abs(cfg.WebClientDir)
+	if err != nil {
+		abs = cfg.WebClientDir
+	}
+	return &ProxyWebClientHandler{
+		cfg:          cfg,
+		keySvc:       keySvc,
+		webClientAbs: abs,
+		wsTransport: &http.Transport{
+			DialContext: (&net.Dialer{
+				Timeout:   10 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+			MaxIdleConns:          200,
+			MaxIdleConnsPerHost:   100,
+			IdleConnTimeout:       90 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+			DisableCompression:    true,
+		},
+		wsBufPool: &wsBufferPool{
+			pool: sync.Pool{
+				New: func() any {
+					return make([]byte, 32*1024)
+				},
+			},
+		},
+	}
 }
 
 // ProxyWS creates a reverse proxy handler forwarding WebSocket/HTTP upgrades to official hbbs or hbbr.
@@ -35,6 +82,8 @@ func (h *ProxyWebClientHandler) ProxyWS(targetRaw string) gin.HandlerFunc {
 		}
 	}
 	proxy := httputil.NewSingleHostReverseProxy(target)
+	proxy.Transport = h.wsTransport
+	proxy.BufferPool = h.wsBufPool
 	origDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		origDirector(req)
@@ -50,7 +99,7 @@ func (h *ProxyWebClientHandler) ProxyWS(targetRaw string) gin.HandlerFunc {
 
 // ServeWebClient serves static official RustDesk Flutter Web Client assets or a setup guide if not yet populated.
 func (h *ProxyWebClientHandler) ServeWebClient(c *gin.Context) {
-	indexPath := filepath.Join(h.cfg.WebClientDir, "index.html")
+	indexPath := filepath.Join(h.webClientAbs, "index.html")
 	if _, err := os.Stat(indexPath); err != nil {
 		h.renderGuidePage(c)
 		return
@@ -68,17 +117,12 @@ func (h *ProxyWebClientHandler) ServeWebClient(c *gin.Context) {
 		return
 	}
 
-	baseAbs, err := filepath.Abs(h.cfg.WebClientDir)
-	if err != nil {
-		c.Status(http.StatusInternalServerError)
-		return
-	}
-	targetAbs, err := filepath.Abs(filepath.Join(baseAbs, cleaned))
+	targetAbs, err := filepath.Abs(filepath.Join(h.webClientAbs, cleaned))
 	if err != nil {
 		c.Status(http.StatusForbidden)
 		return
 	}
-	if targetAbs != baseAbs && !strings.HasPrefix(targetAbs, baseAbs+string(filepath.Separator)) {
+	if targetAbs != h.webClientAbs && !strings.HasPrefix(targetAbs, h.webClientAbs+string(filepath.Separator)) {
 		c.Status(http.StatusForbidden)
 		return
 	}
