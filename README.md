@@ -1,6 +1,11 @@
-# 自建 RustDesk API 与官方服务端编排方案
+# RustDesk API Server
 
-这是一个完全自研的 **Go (Gin + GORM)** RustDesk 后端 API 与管理控制台实现，原生编排**官方开源 RustDesk 服务端**（`rustdesk/rustdesk-server:latest`，即 `hbbs` + `hbbr`），兼顾稳定、轻量化、安全性以及官方组件无痛更新能力。
+[![CI](https://github.com/echolunet/rustdesk-api/actions/workflows/ci.yml/badge.svg)](https://github.com/echolunet/rustdesk-api/actions/workflows/ci.yml)
+![Go](https://img.shields.io/badge/Go-1.24-00ADD8?logo=go&logoColor=white)
+![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white)
+![RustDesk](https://img.shields.io/badge/RustDesk-Official%20Server-2563EB)
+
+基于 **Go (Gin + GORM)** 自研的开源 RustDesk 后端 API 与现代化 Web 管理控制台，原生解耦编排**官方 `rustdesk/rustdesk-server:latest`**（`hbbs` + `hbbr`），兼具轻量化、账户与安全管控、2FA/邮箱验证以及官方服务端无痛升级能力。
 
 ---
 
@@ -22,40 +27,44 @@
           └────────────────────────────────┘
 ```
 
-### 核心特性
+---
 
-1. **官方组件解耦与无缝更新**
-   - `hbbs`、`hbbr` 直接运行官方镜像 `rustdesk/rustdesk-server:latest`，支持一键 `docker compose pull` 或启用 Watchtower 定时自动拉取官方最新版，密钥与配置持久化在 `./data/server`，升级零数据丢失。
-   - 后台自带 **官方版本检测中心**（`GET /admin/api/system/updates`），实时对比 `rustdesk/rustdesk` 客户端与 `rustdesk/rustdesk-server` 服务端最新 Release 并提供下载入口。
-2. **完整的 RustDesk 客户端协议兼容**
-   - 认证与会话：`/api/login`（原生支持 `tfa_check` 两步验证与 `email_check` 邮箱验证码握手）、`/api/logout`、`/api/currentUser`（含 JWT 会话追踪与主动踢下线）。
-   - 地址簿与标签：完整支持 **Legacy v1**（`/api/ab`、`/api/ab/get`）与 **Modern v2 个人/共享地址簿**（`/api/ab/personal`、`/api/ab/shared/profiles`、`/api/ab/peers`、`/api/ab/tags/:guid`、`/api/ab/peer/*`、`/api/ab/tag/*`、`/api/ab/settings`）。
-   - 设备发现与分组权限：`/api/heartbeat`、`/api/sysinfo`（内置 UUID 防篡改校验，杜绝设备 ID 覆盖伪造）、`/api/sysinfover`、`/api/peers`、`/api/devices`、`/api/users`、`/api/device-group/accessible`。
-   - 审计上报：`/api/audit/conn`、`/api/audit/file`、`/api/audit/alarm`。
-3. **内置 Web 管理控制台（`/_admin/`）**
-   - 零外部 CDN 依赖（内网离线可用），支持浅色/深色主题与移动端响应式布局，打包进单个 Go 二进制。
-   - 支持仪表盘、用户与用户组、受管设备与设备分组 ACL、个人/共享地址簿与标签、审计与登录日志、OIDC/GitHub/Google/LDAP 配置、一键生成客户端配置导入串与**移动端扫码配置二维码**。
-4. **2FA 两步验证与邮箱登录安全校验**
-   - **TOTP 动态口令**：支持 Google/Microsoft Authenticator 扫码绑定、6 位动态验证码校验以及 6 个一次性备用恢复码；管理后台支持两步验证登录与管理员重置用户 2FA。
-   - **SMTP 邮箱登录验证**：支持配置 `STARTTLS` / `SSL` / 无加密 SMTP 与发送测试邮件，可选 **关闭 / 仅新设备首次验证（自动记录信任设备） / 每次登录验证** 或按单用户开启。
-5. **第三方登录（SSO / LDAP）**
-   - 支持 **通用 OIDC**（Keycloak、Authentik、Authelia、Okta 等，自动发现 `.well-known/openid-configuration`）、**GitHub**、**Google**（实现 `/api/login-options`、`/api/oidc/auth`、`/api/oidc/auth-query`、`/api/oidc/callback`）。
-   - 支持 **LDAP / Active Directory**（支持 LDAPS 与自签证书跳过选项，后台支持一键连通性测试）。
-6. **WebSocket 代理与 Web 客户端托管**
-   - 内置 `/ws/id` -> `hbbs:21118` 与 `/ws/relay` -> `hbbr:21119` 反向代理，同时提供生产级 `nginx/rustdesk.conf` HTTPS/WSS 模板。
-   - 提供 `./scripts/sync-webclient.sh`，可直接通过 Docker 从官方 `rustdesk/rustdesk` 编译最新 Flutter Web 客户端到 `./data/webclient` 并在 `/webclient/` 托管。
+## 核心特性
+
+- **官方服务端解耦 & 一键更新**
+  - `hbbs`、`hbbr` 直接采用官方镜像 `rustdesk/rustdesk-server:latest` 并默认开启 `-k _` 公钥强校验，密钥持久化在 `./data/server`。
+  - 支持 `./scripts/update.sh` 手动更新或启用 Watchtower 定时自动拉取官方最新版，升级过程不丢失任何密钥或数据。
+  - 管理后台内置**官方版本检测中心**，实时展示 `rustdesk/rustdesk` 客户端与 `rustdesk/rustdesk-server` 最新 Release 及下载入口。
+- **完整兼容 RustDesk 客户端协议**
+  - **认证与会话**：`/api/login`、`/api/logout`、`/api/currentUser`（JWT 持久化会话，支持管理员主动踢下线）。
+  - **地址簿与标签**：完整支持 Legacy v1（`/api/ab`、`/api/ab/get`）与 Modern v2 个人/共享地址簿（`/api/ab/personal`、`/api/ab/shared/profiles`、`/api/ab/peers`、`/api/ab/tags/:guid`、`/api/ab/peer/*`、`/api/ab/tag/*`、`/api/ab/settings`），双向同步。
+  - **设备与权限隔离**：`/api/heartbeat`、`/api/sysinfo`（内置 `peer_id + uuid` 归属校验，拒绝跨 UUID 覆盖设备信息）、`/api/peers`、`/api/devices`、`/api/users`、`/api/device-group/accessible`。
+  - **审计上报**：`/api/audit/conn`、`/api/audit/file`、`/api/audit/alarm`。
+- **2FA 两步验证 & SMTP 邮箱登录校验**
+  - **TOTP 动态验证器**：支持 Google / Microsoft Authenticator / 1Password 等扫码绑定，内置 6 个一次性备用恢复码（`XXXX-XXXX`）。
+  - **SMTP 邮箱验证**：支持 `STARTTLS` / `SSL` / 无加密发信与后台发送测试邮件；支持 **关闭全局 / 仅新设备首次验证（自动记录信任设备） / 每次登录验证** 及单用户强制开关。
+- **内置离线 Web 管理控制台（`/_admin/`）**
+  - 零外部 CDN 依赖（纯原生 HTML/CSS/JS 嵌入单个 Go 二进制），支持浅色 / 深色双主题与移动端抽屉布局。
+  - 提供仪表盘、用户与分组、受管设备与设备分组 ACL、个人/共享地址簿与真彩标签、审计与登录日志、2FA/SMTP 安全设置、OIDC/GitHub/Google/LDAP 配置。
+  - 自动读取官方 `id_ed25519.pub`，生成**客户端一键配置导入串**、`rustdesk --config` 命令以及**手机端扫码配置二维码**。
+- **第三方登录（SSO / LDAP）**
+  - 支持通用 **OIDC**（Keycloak、Authentik、Authelia、Okta 等，自动发现 `.well-known/openid-configuration`）、**GitHub**、**Google** 与 **LDAP / Active Directory**（支持在线测试连接）。
+- **WebSocket 代理 & Web 客户端托管**
+  - 内置 `/ws/id` → `hbbs:21118` 与 `/ws/relay` → `hbbr:21119` 反向代理，附带生产级 `nginx/rustdesk.conf` HTTPS/WSS 配置及官方 Flutter Web 客户端同步脚本。
 
 ---
 
-## 快速开始
+## 快速部署
 
-### 1. 准备环境变量
+### 1. 克隆项目并配置环境变量
 
 ```bash
+git clone https://github.com/echolunet/rustdesk-api.git
+cd rustdesk-api
 cp .env.example .env
 ```
 
-编辑 `.env`，至少修改以下三项为你的公网 IP 或域名：
+编辑 `.env`，将以下三项修改为你的服务器公网 IP 或域名：
 
 ```env
 RUSTDESK_ID_SERVER=your.domain.com:21116
@@ -63,15 +72,16 @@ RUSTDESK_RELAY_SERVER=your.domain.com:21117
 RUSTDESK_API_SERVER=http://your.domain.com:21114
 ```
 
-> 国内服务器若构建时拉取 Go 模块较慢，可在 `.env` 中取消/修改 `GOPROXY=https://goproxy.cn,direct`。
+> 国内服务器若构建时拉取 Go 依赖较慢，可在 `.env` 中设置 `GOPROXY=https://goproxy.cn,direct`。
 
-### 2. 启动容器编排
+### 2. 启动服务
 
 ```bash
+chmod +x scripts/update.sh scripts/sync-webclient.sh
 docker compose up -d --build
 ```
 
-### 3. 放行防火墙 / 云服务器安全组端口
+### 3. 放行防火墙 / 安全组端口
 
 | 端口 | 协议 | 用途 |
 | :--- | :--- | :--- |
@@ -79,44 +89,52 @@ docker compose up -d --build
 | `21115` | TCP | 官方 `hbbs` NAT 类型检测 |
 | `21116` | TCP & UDP | 官方 `hbbs` ID 注册、心跳（UDP）与 TCP 打洞 |
 | `21117` | TCP | 官方 `hbbr` 中继流量转发 |
-| `21118` | TCP | 官方 `hbbs` WebSocket（若走 Nginx HTTPS 可仅内网暴露） |
-| `21119` | TCP | 官方 `hbbr` WebSocket（若走 Nginx HTTPS 可仅内网暴露） |
+| `21118` | TCP | 官方 `hbbs` WebSocket（使用 Nginx HTTPS 反代时可不对外开放） |
+| `21119` | TCP | 官方 `hbbr` WebSocket（使用 Nginx HTTPS 反代时可不对外开放） |
 
-### 4. 获取初始管理员密码与官方 Key
+### 4. 获取初始密码与官方公钥
 
 ```bash
-# 查看自动生成的初始管理员账号密码
+# 查看首次启动自动生成的管理员账号与随机密码
 docker logs rustdesk-api
 
-# 查看官方 hbbs 生成的公钥（也可直接在管理后台首页复制）
+# 查看官方 hbbs 生成的公钥（也可直接登录后台首页查看/复制）
 cat ./data/server/id_ed25519.pub
 ```
 
-浏览器访问 `http://<你的服务器IP>:21114/_admin/` 登录控制台并修改初始密码。
+浏览器访问 `http://<你的服务器IP>:21114/_admin/` 登录管理后台并及时修改初始密码。
 
 ---
 
-## 客户端配置与一键导入
+## 客户端配置与扫码导入
 
-在控制台 **「概览仪表盘」** 或 **「服务端配置与官方更新」** 中可以直接复制：
-- **ID 服务器 / 中继服务器 / API 服务器 / Public Key** 手动填入 RustDesk 客户端「网络设置」；
-- 或直接复制 **一键配置导入字符串**，在客户端设置中导入，或使用命令行静默部署：
-  ```bash
-  rustdesk --config "<配置导入字符串>"
-  ```
+登录管理后台 **「概览仪表盘」** 或 **「配置与官方更新」**，支持三种方式配置 RustDesk 客户端：
+
+1. **手机端扫码**：打开 RustDesk App「网络设置」→ 点击右上角扫码图标，直接扫描后台生成的配置二维码。
+2. **桌面端一键导入**：复制后台生成的「一键配置导入字符串」，或通过 CLI 静默部署：
+   ```bash
+   rustdesk --config "<配置导入字符串>"
+   ```
+3. **手动填写**：按后台展示的 ID 服务器、中继服务器、API 服务器与 Public Key 填入客户端「网络设置」。
 
 ---
 
-## 更新官方 RustDesk 与自研 API
+## 安全功能配置（2FA / 邮箱登录验证）
 
-### 方式一：手动一键更新（推荐）
+1. **开启 TOTP 两步验证**：在后台左侧菜单进入 **「安全与验证 (2FA)」** → 点击 **「立即开启 2FA」** → 使用验证器 App 扫描二维码并输入 6 位动态码，同时保存生成的 6 个一次性备用恢复码。
+2. **开启 SMTP 邮箱验证**：在同一页面填写 SMTP 服务器（支持 `STARTTLS` / `SSL` / 无加密），先发送测试邮件验证连通性，再选择全局验证策略（**关闭** / **仅新设备首次登录验证** / **每次登录验证**）或前往 **「用户与分组」** 为单个用户单独开启「强制邮箱验证」。
+3. **管理员应急重置**：若用户更换或丢失验证器手机，管理员可在 **「用户与分组」** 中点击该用户的 **「重置 2FA」**。
 
-Linux / macOS：
+---
+
+## 更新官方服务端与 API
+
+### 手动更新
+
 ```bash
-chmod +x scripts/update.sh scripts/sync-webclient.sh
 ./scripts/update.sh                # 仅拉取最新官方 rustdesk/rustdesk-server (hbbs & hbbr)
-./scripts/update.sh --rebuild-api  # 同时从源码重新编译更新自研 API 容器
-./scripts/update.sh --all          # 拉取 GitHub 最新源码 + 重建 API + 更新官方服务端
+./scripts/update.sh --rebuild-api  # 重建本地 rustdesk-api 容器并更新官方服务端
+./scripts/update.sh --all          # 拉取最新代码 + 重建 API + 更新官方服务端
 ```
 
 Windows PowerShell：
@@ -125,9 +143,9 @@ Windows PowerShell：
 .\scripts\update.ps1 -RebuildApi   # 同时重建 API 容器
 ```
 
-### 方式二：自动定时更新官方 `hbbs` & `hbbr`
+### 自动定时更新官方 `hbbs` & `hbbr`
 
-Compose 中已内置 Watchtower Profile（仅针对打标 `com.centurylinklabs.watchtower.enable=true` 的官方 `hbbs` / `hbbr` 容器生效，不会误删本地自建 API）：
+`docker-compose.yml` 已内置 Watchtower Profile（仅对带 `com.centurylinklabs.watchtower.enable=true` 标签的官方 `hbbs`/`hbbr` 容器生效）：
 
 ```bash
 docker compose --profile auto-update up -d
@@ -137,7 +155,7 @@ docker compose --profile auto-update up -d
 
 ## 切换外部数据库（MySQL / PostgreSQL）
 
-默认使用零依赖纯 Go SQLite（持久化在 `./data/api/rustdesk-api.db`）。如需切换为 MySQL 或 PostgreSQL，只需修改 `.env` 后重启 `rustdesk-api`：
+默认使用纯 Go SQLite（持久化在 `./data/api/rustdesk-api.db`）。如需切换外部数据库，修改 `.env` 后执行 `docker compose up -d` 即可自动建表迁移：
 
 ```env
 # MySQL
@@ -153,66 +171,32 @@ DB_DSN=host=postgres user=rustdesk password=password dbname=rustdesk port=5432 s
 
 ## HTTPS / WSS 与 Web 客户端托管
 
-1. 将 SSL 证书放入 `./nginx/ssl/fullchain.pem` 和 `./nginx/ssl/privkey.pem`。
-2. 同步或构建官方 Web 客户端静态文件：
+1. 将证书放置到 `./nginx/ssl/fullchain.pem` 和 `./nginx/ssl/privkey.pem`。
+2. 如需本地托管官方 Flutter Web 客户端，可运行脚本编译或从压缩包同步静态文件到 `./data/webclient`：
    ```bash
    ./scripts/sync-webclient.sh --build-official master
    ```
-3. 启用内置 Nginx 反代 Profile：
+3. 启动内置 Nginx 反代 Profile：
    ```bash
    docker compose --profile nginx up -d
    ```
-   此时可通过 `https://your.domain.com/_admin/` 访问后台，`https://your.domain.com/webclient/` 访问 Web 客户端，`RUSTDESK_API_SERVER` 可更新为 `https://your.domain.com`。
+   启用后可通过 `https://your.domain.com/_admin/` 访问控制台，通过 `https://your.domain.com/webclient/` 访问 Web 客户端，并将 `.env` 中的 `RUSTDESK_API_SERVER` 更新为 `https://your.domain.com`。
 
 ---
 
-## 关于官方 OSS `hbbs` 与 Fork 版 `hbbs` 的差异说明
+## 关于官方 OSS `hbbs` 与 Fork 版 `hbbs` 的说明
 
-- 本项目默认采用 **官方原版 `rustdesk/rustdesk-server:latest`** 并强制开启 `-k _` 公钥加密校验，确保你可以第一时间紧跟官方安全补丁与版本更新。
-- 官方开源版 `hbbs` 本身不含闭源 Pro 版的强制登录后才允许信令握手（`MUST_LOGIN`）逻辑（`lejianwen` 方案是通过自行修改 fork 版 `hbbs` 实现的）。在本项目中，所有**用户账号登录、地址簿、标签、设备权限隔离、SSO/LDAP、审计日志**均在 API 层完整实现；若未来确有信令层强登录需求，只需将 `.env` 中 `RUSTDESK_SERVER_IMAGE` 替换为自定义 `hbbs` 镜像即可无缝兼容。
-
----
-
-## 上传到 GitHub 并在 VPS 拉取部署
-
-> 本仓库已内置 `.gitignore`（自动忽略 `.env`、`data/`、`nginx/ssl/*.pem` 和本地数据库文件）与 `.gitattributes`（强制 `.sh`/源码为 LF 换行符），可直接从 Windows 安全推送到 GitHub。
-
-### 1. 本地推送到你的 GitHub 仓库（Windows）
-
-```powershell
-cd e:\workspace\rustdesk
-git init -b main
-git add .
-git commit -m "init: rustdesk custom api and official server compose"
-git remote add origin https://github.com/<你的用户名>/<你的仓库名>.git
-git push -u origin main
-```
-
-### 2. 在 VPS 上首次拉取并启动
-
-```bash
-git clone https://github.com/<你的用户名>/<你的仓库名>.git rustdesk
-cd rustdesk
-cp .env.example .env
-# 修改 .env 中的公网 IP/域名 (RUSTDESK_ID_SERVER / RUSTDESK_RELAY_SERVER / RUSTDESK_API_SERVER)
-chmod +x scripts/update.sh scripts/sync-webclient.sh
-docker compose up -d --build
-```
-
-### 3. 日后 VPS 一键同步更新（你的仓库 + 官方最新版）
-
-```bash
-./scripts/update.sh --all
-```
+- 本项目默认采用**官方原版 `rustdesk/rustdesk-server:latest`** 并启用 `-k _` 公钥强校验，确保第一时间跟进官方安全更新与兼容性修复。
+- 官方开源版 `hbbs` 不包含商业 Pro 版或社区 Fork 版的信令层强制登录拦截（`MUST_LOGIN`）。所有账户鉴权、设备权限隔离、地址簿、2FA/邮箱验证、SSO/LDAP 与审计均在 API 层完整实现；如确有信令层拦截需求，将 `.env` 中的 `RUSTDESK_SERVER_IMAGE` 替换为对应镜像即可无缝配合本 API 运行。
 
 ---
 
-## 运行自动化测试
+## 运行测试
 
 ```bash
-# 在本地有 Go 1.24+ 环境时：
+# 本地具备 Go 1.24+ 环境
 go test -v ./...
 
-# 无本地 Go 环境时，直接通过 Docker 执行测试阶段：
+# 通过 Docker 执行测试阶段
 docker build --target test .
 ```
