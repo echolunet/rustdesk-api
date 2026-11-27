@@ -39,6 +39,23 @@ type Config struct {
 
 	AllowAllDevicesForUsers bool
 	MaxPeerOneAB            int
+
+	ClientStrategyEnabled     bool
+	ClientDefaultImageQuality string
+	ClientDefaultFPS          int
+	ClientDefaultQuality      int
+	ClientDefaultCodec        string
+	ClientEnableHWCodec       bool
+	ClientEnableAudio         bool
+	ClientEnableClipboard     bool
+	ClientEnableFileTransfer  bool
+	ClientEnableKeyboard      bool
+	ClientEnableTunnel        bool
+	ClientEnableRemoteRestart bool
+	ClientEnableRecordSession bool
+	ClientDirectServer        bool
+	ClientVerificationMethod  string
+	ClientApproveMode         string
 }
 
 // Load reads configuration from environment variables and ensures required directories and JWT secret exist.
@@ -87,6 +104,23 @@ func Load() (*Config, error) {
 		HBBRWSTarget:            getEnv("HBBR_WS_TARGET", "http://hbbr:21119"),
 		AllowAllDevicesForUsers: getEnvBool("ALLOW_ALL_DEVICES_FOR_USERS", false),
 		MaxPeerOneAB:            getEnvInt("MAX_PEER_ONE_AB", 0),
+
+		ClientStrategyEnabled:     getEnvBool("CLIENT_STRATEGY_ENABLED", true),
+		ClientDefaultImageQuality: getEnv("CLIENT_DEFAULT_IMAGE_QUALITY", "custom"),
+		ClientDefaultFPS:          clampInt(getEnvInt("CLIENT_DEFAULT_FPS", 60), 5, 120),
+		ClientDefaultQuality:      clampInt(getEnvInt("CLIENT_DEFAULT_QUALITY", 75), 10, 100),
+		ClientDefaultCodec:        getEnv("CLIENT_DEFAULT_CODEC", "auto"),
+		ClientEnableHWCodec:       getEnvBool("CLIENT_ENABLE_HWCODEC", true),
+		ClientEnableAudio:         getEnvBool("CLIENT_ENABLE_AUDIO", true),
+		ClientEnableClipboard:     getEnvBool("CLIENT_ENABLE_CLIPBOARD", true),
+		ClientEnableFileTransfer:  getEnvBool("CLIENT_ENABLE_FILE_TRANSFER", true),
+		ClientEnableKeyboard:      getEnvBool("CLIENT_ENABLE_KEYBOARD", true),
+		ClientEnableTunnel:        getEnvBool("CLIENT_ENABLE_TUNNEL", true),
+		ClientEnableRemoteRestart: getEnvBool("CLIENT_ENABLE_REMOTE_RESTART", true),
+		ClientEnableRecordSession: getEnvBool("CLIENT_ENABLE_RECORD_SESSION", false),
+		ClientDirectServer:        getEnvBool("CLIENT_DIRECT_SERVER", false),
+		ClientVerificationMethod:  strings.TrimSpace(os.Getenv("CLIENT_VERIFICATION_METHOD")),
+		ClientApproveMode:         strings.TrimSpace(os.Getenv("CLIENT_APPROVE_MODE")),
 	}
 	return cfg, nil
 }
@@ -140,4 +174,14 @@ func getEnvBool(key string, fallback bool) bool {
 		return fallback
 	}
 	return v == "1" || v == "true" || v == "yes" || v == "y"
+}
+
+func clampInt(val, minVal, maxVal int) int {
+	if val < minVal {
+		return minVal
+	}
+	if val > maxVal {
+		return maxVal
+	}
+	return val
 }

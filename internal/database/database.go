@@ -7,6 +7,7 @@ import (
 	"log"
 	"math/big"
 	"strings"
+	"time"
 
 	"github.com/glebarez/sqlite"
 	"github.com/google/uuid"
@@ -79,6 +80,7 @@ func Init(cfg *config.Config) (*gorm.DB, error) {
 		&model.VerificationCode{},
 		&model.TrustedDevice{},
 		&model.SystemSetting{},
+		&model.ClientStrategy{},
 	); err != nil {
 		return nil, fmt.Errorf("auto migrate: %w", err)
 	}
@@ -138,6 +140,36 @@ func Seed(db *gorm.DB, cfg *config.Config) error {
 			CodeExpireMinutes: 10,
 		}
 		if err := db.Create(&smtpDefault).Error; err != nil {
+			return err
+		}
+	}
+
+	var stratCount int64
+	if err := db.Model(&model.ClientStrategy{}).Count(&stratCount).Error; err != nil {
+		return err
+	}
+	if stratCount == 0 {
+		strat := model.ClientStrategy{
+			Enabled:             cfg.ClientStrategyEnabled,
+			ImageQuality:        cfg.ClientDefaultImageQuality,
+			CustomFPS:           cfg.ClientDefaultFPS,
+			CustomImageQuality:  cfg.ClientDefaultQuality,
+			CodecPreference:     cfg.ClientDefaultCodec,
+			EnableHWCodec:       cfg.ClientEnableHWCodec,
+			EnableAudio:         cfg.ClientEnableAudio,
+			EnableClipboard:     cfg.ClientEnableClipboard,
+			EnableFileTransfer:  cfg.ClientEnableFileTransfer,
+			EnableKeyboard:      cfg.ClientEnableKeyboard,
+			EnableTunnel:        cfg.ClientEnableTunnel,
+			EnableRemoteRestart: cfg.ClientEnableRemoteRestart,
+			EnableRecordSession: cfg.ClientEnableRecordSession,
+			DirectServer:        cfg.ClientDirectServer,
+			VerificationMethod:  cfg.ClientVerificationMethod,
+			ApproveMode:         cfg.ClientApproveMode,
+			StrategyModifiedAt:  time.Now().Unix(),
+		}
+		strat.Normalize()
+		if err := db.Create(&strat).Error; err != nil {
 			return err
 		}
 	}

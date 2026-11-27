@@ -424,3 +424,110 @@ func TestTOTP2FAAndEmailVerificationFlows(t *testing.T) {
 		t.Fatalf("expected verified device to be marked trusted under new_device policy")
 	}
 }
+
+func TestClientStrategyHeartbeatPush(t *testing.T) {
+	srv, _ := setupTestServer(t)
+
+	rec := doJSON(t, srv, http.MethodPost, "/admin/api/login", "", map[string]interface{}{
+		"username": "admin",
+		"password": "AdminPass123!",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("admin login failed (%d): %s", rec.Code, rec.Body.String())
+	}
+	var adminLogin struct {
+		AccessToken string `json:"access_token"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &adminLogin)
+	token := adminLogin.AccessToken
+
+	// 1. Default seeded strategy exposes 60 FPS
+	rec = doJSON(t, srv, http.MethodGet, "/admin/api/client-strategy", token, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get client strategy failed (%d): %s", rec.Code, rec.Body.String())
+	}
+	var stratResp struct {
+		Strategy struct {
+			Enabled            bool   `json:"enabled"`
+			CustomFPS          int    `json:"custom_fps"`
+			StrategyModifiedAt int64  `json:"strategy_modified_at"`
+		} `json:"strategy"`
+		ConfigOptions map[string]string `json:"config_options"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &stratResp)
+	if !stratResp.Strategy.Enabled || stratResp.Strategy.CustomFPS != 60 || stratResp.ConfigOptions["custom-fps"] != "60" {
+		t.Fatalf("unexpected default client strategy: %+v", stratResp)
+	}
+
+	// 2. Reject invalid extra_options JSON
+	rec = doJSON(t, srv, http.MethodPut, "/admin/api/client-strategy", token, map[string]interface{}{
+		"enabled":       true,
+		"custom_fps":    60,
+		"extra_options": "{bad-json",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on invalid extra_options json, got %d", rec.Code)
+	}
+
+	// 3. Update strategy to 120 FPS and verify protected anchor keys are stripped from extra_options
+	rec = doJSON(t, srv, http.MethodPut, "/admin/api/client-strategy", token, map[string]interface{}{
+		"enabled":               true,
+		"image_quality":         "custom",
+		"custom_fps":            120,
+		"custom_image_quality":  90,
+		"codec_preference":      "vp9",
+		"enable_hwcodec":        true,
+		"enable_audio":          false,
+		"enable_clipboard":      true,
+		"enable_file_transfer":  false,
+		"enable_keyboard":       true,
+		"enable_tunnel":         true,
+		"enable_remote_restart": true,
+		"enable_record_session": false,
+		"direct_server":         true,
+		"extra_options":         `{"allow-remove-wallpaper":"Y","api-server":"https://evil.example"}`,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("update client strategy failed (%d): %s", rec.Code, rec.Body.String())
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &stratResp)
+	if stratResp.ConfigOptions["custom-fps"] != "120" || stratResp.ConfigOptions["enable-audio"] != "N" || stratResp.ConfigOptions["direct-server"] != "Y" {
+		t.Fatalf("unexpected updated config_options: %+v", stratResp.ConfigOptions)
+	}
+	if _, forbidden := stratResp.ConfigOptions["api-server"]; forbidden {
+		t.Fatalf("protected key api-server must not be overridden by extra_options")
+	}
+	modUnix := stratResp.Strategy.StrategyModifiedAt
+
+	// 4. Client heartbeat with stale modified_at receives pushed strategy
+	rec = doJSON(t, srv, http.MethodPost, "/api/heartbeat", "", map[string]interface{}{
+		"id":          "400500600",
+		"uuid":        "uuid-strategy-test",
+		"ver":         "1.3.0",
+		"modified_at": 0,
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("heartbeat failed (%d): %s", rec.Code, rec.Body.String())
+	}
+	var hbPush struct {
+		ModifiedAt int64 `json:"modified_at"`
+		Strategy   *struct {
+			ConfigOptions map[string]string `json:"config_options"`
+		} `json:"strategy"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &hbPush)
+	if hbPush.ModifiedAt != modUnix || hbPush.Strategy == nil || hbPush.Strategy.ConfigOptions["custom-fps"] != "120" {
+		t.Fatalf("expected pushed strategy in heartbeat response, got: %s", rec.Body.String())
+	}
+
+	// 5. Client heartbeat with current modified_at skips redundant strategy payload
+	rec = doJSON(t, srv, http.MethodPost, "/api/heartbeat", "", map[string]interface{}{
+		"id":          "400500600",
+		"uuid":        "uuid-strategy-test",
+		"ver":         "1.3.0",
+		"modified_at": modUnix,
+	})
+	if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), `"strategy"`) {
+		t.Fatalf("expected synced heartbeat without strategy push, got (%d): %s", rec.Code, rec.Body.String())
+	}
+}

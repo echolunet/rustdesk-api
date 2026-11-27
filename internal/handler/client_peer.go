@@ -73,6 +73,28 @@ func (h *ClientPeerHandler) Heartbeat(c *gin.Context) {
 		}
 	}
 
+	var strat model.ClientStrategy
+	if err := h.db.Order("id asc").First(&strat).Error; err == nil && strat.Enabled {
+		modUnix := strat.StrategyModifiedAt
+		if modUnix <= 0 {
+			modUnix = now.Unix()
+		}
+		if req.ModifiedAt == 0 || req.ModifiedAt < modUnix {
+			c.JSON(http.StatusOK, gin.H{
+				"modified_at": modUnix,
+				"disconnect":  []string{},
+				"strategy": gin.H{
+					"config_options": strat.ToConfigOptions(),
+				},
+			})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"modified_at": modUnix,
+		})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"modified_at": now.Unix(),
 	})

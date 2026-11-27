@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
@@ -455,4 +457,144 @@ func (h *AdminSystemHandler) TestSMTP(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, gin.H{"ok": true, "message": "测试邮件发送成功，请查收收件箱"})
+}
+
+type clientStrategyReq struct {
+	Enabled             bool   `json:"enabled"`
+	ImageQuality        string `json:"image_quality"`
+	CustomFPS           int    `json:"custom_fps"`
+	CustomImageQuality  int    `json:"custom_image_quality"`
+	CodecPreference     string `json:"codec_preference"`
+	EnableHWCodec       bool   `json:"enable_hwcodec"`
+	EnableAudio         bool   `json:"enable_audio"`
+	EnableClipboard     bool   `json:"enable_clipboard"`
+	EnableFileTransfer  bool   `json:"enable_file_transfer"`
+	EnableKeyboard      bool   `json:"enable_keyboard"`
+	EnableTunnel        bool   `json:"enable_tunnel"`
+	EnableRemoteRestart bool   `json:"enable_remote_restart"`
+	EnableRecordSession bool   `json:"enable_record_session"`
+	DirectServer        bool   `json:"direct_server"`
+	VerificationMethod  string `json:"verification_method"`
+	ApproveMode         string `json:"approve_mode"`
+	ExtraOptions        string `json:"extra_options"`
+}
+
+// GetClientStrategy returns the singleton RustDesk client default strategy and generated config_options.
+func (h *AdminSystemHandler) GetClientStrategy(c *gin.Context) {
+	var strat model.ClientStrategy
+	err := h.db.Order("id asc").First(&strat).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		strat = model.ClientStrategy{
+			Enabled:             true,
+			ImageQuality:        "custom",
+			CustomFPS:           60,
+			CustomImageQuality:  75,
+			CodecPreference:     "auto",
+			EnableHWCodec:       true,
+			EnableAudio:         true,
+			EnableClipboard:     true,
+			EnableFileTransfer:  true,
+			EnableKeyboard:      true,
+			EnableTunnel:        true,
+			EnableRemoteRestart: true,
+			StrategyModifiedAt:  time.Now().Unix(),
+		}
+		strat.Normalize()
+	} else if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load client strategy failed"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"strategy":       strat,
+		"config_options": strat.ToConfigOptions(),
+	})
+}
+
+// UpdateClientStrategy updates centralized client defaults and bumps StrategyModifiedAt for heartbeat sync.
+func (h *AdminSystemHandler) UpdateClientStrategy(c *gin.Context) {
+	var req clientStrategyReq
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "invalid payload"})
+		return
+	}
+
+	candidate := model.ClientStrategy{
+		Enabled:             req.Enabled,
+		ImageQuality:        req.ImageQuality,
+		CustomFPS:           req.CustomFPS,
+		CustomImageQuality:  req.CustomImageQuality,
+		CodecPreference:     req.CodecPreference,
+		EnableHWCodec:       req.EnableHWCodec,
+		EnableAudio:         req.EnableAudio,
+		EnableClipboard:     req.EnableClipboard,
+		EnableFileTransfer:  req.EnableFileTransfer,
+		EnableKeyboard:      req.EnableKeyboard,
+		EnableTunnel:        req.EnableTunnel,
+		EnableRemoteRestart: req.EnableRemoteRestart,
+		EnableRecordSession: req.EnableRecordSession,
+		DirectServer:        req.DirectServer,
+		VerificationMethod:  req.VerificationMethod,
+		ApproveMode:         req.ApproveMode,
+		ExtraOptions:        req.ExtraOptions,
+	}
+	candidate.Normalize()
+	if _, err := candidate.ParseExtraOptions(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	nowUnix := time.Now().Unix()
+	var existing model.ClientStrategy
+	err := h.db.Order("id asc").First(&existing).Error
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		candidate.StrategyModifiedAt = nowUnix
+		if err := h.db.Create(&candidate).Error; err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "save client strategy failed"})
+			return
+		}
+		c.JSON(http.StatusOK, gin.H{
+			"message":        "saved",
+			"strategy":       candidate,
+			"config_options": candidate.ToConfigOptions(),
+		})
+		return
+	}
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "load client strategy failed"})
+		return
+	}
+
+	if nowUnix <= existing.StrategyModifiedAt {
+		nowUnix = existing.StrategyModifiedAt + 1
+	}
+
+	existing.Enabled = candidate.Enabled
+	existing.ImageQuality = candidate.ImageQuality
+	existing.CustomFPS = candidate.CustomFPS
+	existing.CustomImageQuality = candidate.CustomImageQuality
+	existing.CodecPreference = candidate.CodecPreference
+	existing.EnableHWCodec = candidate.EnableHWCodec
+	existing.EnableAudio = candidate.EnableAudio
+	existing.EnableClipboard = candidate.EnableClipboard
+	existing.EnableFileTransfer = candidate.EnableFileTransfer
+	existing.EnableKeyboard = candidate.EnableKeyboard
+	existing.EnableTunnel = candidate.EnableTunnel
+	existing.EnableRemoteRestart = candidate.EnableRemoteRestart
+	existing.EnableRecordSession = candidate.EnableRecordSession
+	existing.DirectServer = candidate.DirectServer
+	existing.VerificationMethod = candidate.VerificationMethod
+	existing.ApproveMode = candidate.ApproveMode
+	existing.ExtraOptions = candidate.ExtraOptions
+	existing.StrategyModifiedAt = nowUnix
+
+	if err := h.db.Save(&existing).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "update client strategy failed"})
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"message":        "saved",
+		"strategy":       existing,
+		"config_options": existing.ToConfigOptions(),
+	})
 }

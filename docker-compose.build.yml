@@ -1,0 +1,8 @@
+services:
+  rustdesk-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    image: ${API_IMAGE:-rustdesk-api-custom:latest}

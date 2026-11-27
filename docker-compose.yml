@@ -36,12 +36,7 @@ services:
       - "com.centurylinklabs.watchtower.enable=true"
 
   rustdesk-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
-    image: ${API_IMAGE:-rustdesk-api-custom:latest}
+    image: ${API_IMAGE:-ghcr.io/echolunet/rustdesk-api:latest}
     container_name: rustdesk-api
     restart: unless-stopped
     depends_on:
@@ -71,6 +66,22 @@ services:
       - HBBR_WS_TARGET=http://hbbr:21119
       - ALLOW_ALL_DEVICES_FOR_USERS=${ALLOW_ALL_DEVICES_FOR_USERS:-false}
       - MAX_PEER_ONE_AB=${MAX_PEER_ONE_AB:-0}
+      - CLIENT_STRATEGY_ENABLED=${CLIENT_STRATEGY_ENABLED:-true}
+      - CLIENT_DEFAULT_IMAGE_QUALITY=${CLIENT_DEFAULT_IMAGE_QUALITY:-custom}
+      - CLIENT_DEFAULT_FPS=${CLIENT_DEFAULT_FPS:-60}
+      - CLIENT_DEFAULT_QUALITY=${CLIENT_DEFAULT_QUALITY:-75}
+      - CLIENT_DEFAULT_CODEC=${CLIENT_DEFAULT_CODEC:-auto}
+      - CLIENT_ENABLE_HWCODEC=${CLIENT_ENABLE_HWCODEC:-true}
+      - CLIENT_ENABLE_AUDIO=${CLIENT_ENABLE_AUDIO:-true}
+      - CLIENT_ENABLE_CLIPBOARD=${CLIENT_ENABLE_CLIPBOARD:-true}
+      - CLIENT_ENABLE_FILE_TRANSFER=${CLIENT_ENABLE_FILE_TRANSFER:-true}
+      - CLIENT_ENABLE_KEYBOARD=${CLIENT_ENABLE_KEYBOARD:-true}
+      - CLIENT_ENABLE_TUNNEL=${CLIENT_ENABLE_TUNNEL:-true}
+      - CLIENT_ENABLE_REMOTE_RESTART=${CLIENT_ENABLE_REMOTE_RESTART:-true}
+      - CLIENT_ENABLE_RECORD_SESSION=${CLIENT_ENABLE_RECORD_SESSION:-false}
+      - CLIENT_DIRECT_SERVER=${CLIENT_DIRECT_SERVER:-false}
+      - CLIENT_VERIFICATION_METHOD=${CLIENT_VERIFICATION_METHOD:-}
+      - CLIENT_APPROVE_MODE=${CLIENT_APPROVE_MODE:-}
     volumes:
       - ./data/server:/data/server:ro
       - ./data/api:/app/data

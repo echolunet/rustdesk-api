@@ -554,6 +554,7 @@
     users: { title: '用户与分组', subtitle: '管理本地与 SSO/LDAP 用户、分组权限与二次验证状态' },
     security: { title: '安全与验证 (2FA)', subtitle: '管理 TOTP 两步验证、SMTP 邮件服务器与登录验证策略' },
     sso: { title: '第三方登录 (SSO / LDAP)', subtitle: '配置 OIDC、GitHub、Google 单点登录与 LDAP/AD 目录集成' },
+    strategy: { title: '客户端默认策略', subtitle: '统一预设远程桌面默认帧率 (FPS)、画质、编解码器与安全权限，通过心跳动态下发' },
     audit: { title: '审计与登录日志', subtitle: '追溯远程会话连接、文件传输、告警事件与登录历史' },
     system: { title: '配置与官方更新', subtitle: '获取二维码/一键导入配置串并检查官方 RustDesk 最新版本' },
   };
@@ -574,6 +575,7 @@
       users: renderUsers,
       security: renderSecurity,
       sso: renderSSO,
+      strategy: renderStrategy,
       audit: renderAudit,
       system: renderSystem,
     };
@@ -2473,6 +2475,406 @@
       area.querySelectorAll('[data-copy-val]').forEach((btn) => {
         btn.onclick = () => copyText(btn.dataset.copyVal);
       });
+    } catch (err) {
+      area.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
+    }
+  }
+
+  // ---------------- 8b. Client Default Strategy ----------------
+  async function renderStrategy() {
+    $('topbar-actions').innerHTML = `
+      <button class="btn btn-secondary btn-sm" id="btn-refresh-strategy">刷新策略</button>
+      <button class="btn btn-primary btn-sm" id="btn-save-strategy">保存并下发</button>
+    `;
+    $('btn-refresh-strategy').onclick = renderStrategy;
+
+    const area = $('content-area');
+    area.innerHTML = renderSkeleton(6);
+
+    const presets = [
+      { id: 'smooth60', title: '高帧流畅 (60 FPS)', meta: '自定义 · 60 FPS · 画质 75%', quality: 'custom', fps: 60, imgQ: 75 },
+      { id: 'ultra120', title: '电竞高刷 (120 FPS)', meta: '自定义 · 120 FPS · 画质 85%', quality: 'custom', fps: 120, imgQ: 85 },
+      { id: 'balanced30', title: '省流均衡 (30 FPS)', meta: '自定义 · 30 FPS · 画质 60%', quality: 'custom', fps: 30, imgQ: 60 },
+      { id: 'low15', title: '极低带宽 (15 FPS)', meta: '自定义 · 15 FPS · 画质 45%', quality: 'custom', fps: 15, imgQ: 45 },
+    ];
+
+    try {
+      const res = await api('/admin/api/client-strategy');
+      const s = res.strategy || {};
+      const modText = s.strategy_modified_at
+        ? new Date(s.strategy_modified_at * 1000).toLocaleString('zh-CN', { hour12: false })
+        : '-';
+
+      area.innerHTML = `
+        <div class="strategy-hero">
+          <div>
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+              <strong style="font-size:15px;">集中策略下发</strong>
+              <span class="badge ${s.enabled ? 'badge-green' : 'badge-gray'}" id="strat-status-badge">${s.enabled ? '已启用下发' : '已暂停下发'}</span>
+              <span class="badge badge-blue" id="strat-version-badge">版本 ${esc(String(s.strategy_modified_at || 0))}</span>
+            </div>
+            <div class="cell-sub">最近策略更新时间：<span id="strat-mod-time">${esc(modText)}</span>（官方客户端通过 <code>/api/heartbeat</code> 自动拉取）</div>
+          </div>
+          <label class="checkbox-row" style="margin:0;background:var(--surface);padding:9px 14px;border-radius:10px;border:1px solid var(--border);">
+            <input type="checkbox" class="switch-check" id="strat-enabled" ${s.enabled ? 'checked' : ''} />
+            <span style="font-weight:600;">启用策略下发</span>
+          </label>
+        </div>
+
+        <div class="info-banner" style="margin-bottom:16px;">
+          提示：<strong>custom-fps</strong> 在画面质量设为 <code>custom</code>（自定义）时生效；修改保存后会递增策略版本号，在线设备将在下一次心跳（通常 15 秒内）自动同步默认配置。
+        </div>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">一键场景预设</h3>
+              <div class="cell-sub">点击预设可快速填充帧率与画质参数，再微调或保存下发</div>
+            </div>
+          </div>
+          <div class="strategy-presets" id="strat-preset-list">
+            ${presets.map((p) => `
+              <button type="button" class="preset-card" data-preset-id="${esc(p.id)}">
+                <span class="preset-title">${esc(p.title)}</span>
+                <span class="preset-meta">${esc(p.meta)}</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+
+        <div class="grid-2" style="margin-bottom:16px;">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">画质、帧率与编解码</h3>
+                <div class="cell-sub">控制默认传输帧率 (5–120 FPS)、压缩画质与首选编码器</div>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="field">
+                <label for="strat-image-quality">默认画质模式 (image-quality)</label>
+                <select id="strat-image-quality" class="select-input">
+                  <option value="custom" ${s.image_quality === 'custom' ? 'selected' : ''}>custom — 自定义帧率与画质（使 FPS 生效）</option>
+                  <option value="balanced" ${s.image_quality === 'balanced' ? 'selected' : ''}>balanced — 平衡模式</option>
+                  <option value="best" ${s.image_quality === 'best' ? 'selected' : ''}>best — 最佳画质</option>
+                  <option value="low" ${s.image_quality === 'low' ? 'selected' : ''}>low — 低带宽流畅</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="strat-fps">默认帧率上限 custom-fps (5–120 FPS)</label>
+                <div class="range-row">
+                  <input type="range" id="strat-fps" class="range-input" min="5" max="120" step="1" value="${Number(s.custom_fps || 60)}" />
+                  <input type="number" id="strat-fps-num" class="range-num" min="5" max="120" value="${Number(s.custom_fps || 60)}" />
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="strat-quality">自定义图像质量 custom-image-quality (10–100%)</label>
+                <div class="range-row">
+                  <input type="range" id="strat-quality" class="range-input" min="10" max="100" step="1" value="${Number(s.custom_image_quality || 75)}" />
+                  <input type="number" id="strat-quality-num" class="range-num" min="10" max="100" value="${Number(s.custom_image_quality || 75)}" />
+                </div>
+              </div>
+
+              <div class="field">
+                <label for="strat-codec">首选视频编解码器 (codec-preference)</label>
+                <select id="strat-codec" class="select-input">
+                  <option value="auto" ${(s.codec_preference || 'auto') === 'auto' ? 'selected' : ''}>auto — 客户端自动协商（推荐）</option>
+                  <option value="vp9" ${s.codec_preference === 'vp9' ? 'selected' : ''}>vp9 — 均衡通用</option>
+                  <option value="vp8" ${s.codec_preference === 'vp8' ? 'selected' : ''}>vp8 — 低开销兼容</option>
+                  <option value="h264" ${s.codec_preference === 'h264' ? 'selected' : ''}>h264 — 硬解兼容最佳</option>
+                  <option value="h265" ${s.codec_preference === 'h265' ? 'selected' : ''}>h265 — 高压缩高清晰</option>
+                  <option value="av1" ${s.codec_preference === 'av1' ? 'selected' : ''}>av1 — 新一代高压缩比</option>
+                </select>
+              </div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">安全验证与连接策略</h3>
+                <div class="cell-sub">控制密码验证方式、被控确认模式及网络直连行为</div>
+              </div>
+            </div>
+            <div class="stack">
+              <div class="field">
+                <label for="strat-verification">密码验证策略 (verification-method)</label>
+                <select id="strat-verification" class="select-input">
+                  <option value="" ${!s.verification_method ? 'selected' : ''}>不覆盖客户端本地设置</option>
+                  <option value="use-both-passwords" ${s.verification_method === 'use-both-passwords' ? 'selected' : ''}>use-both-passwords — 允许临时密码和固定密码</option>
+                  <option value="use-temporary-password" ${s.verification_method === 'use-temporary-password' ? 'selected' : ''}>use-temporary-password — 仅使用一次性临时密码</option>
+                  <option value="use-permanent-password" ${s.verification_method === 'use-permanent-password' ? 'selected' : ''}>use-permanent-password — 仅使用固定密码</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="strat-approve">被控端确认模式 (approve-mode)</label>
+                <select id="strat-approve" class="select-input">
+                  <option value="" ${!s.approve_mode ? 'selected' : ''}>不覆盖客户端本地设置</option>
+                  <option value="both" ${s.approve_mode === 'both' ? 'selected' : ''}>both — 允许弹窗点击或密码验证</option>
+                  <option value="password" ${s.approve_mode === 'password' ? 'selected' : ''}>password — 仅密码验证（无人值守）</option>
+                  <option value="click" ${s.approve_mode === 'click' ? 'selected' : ''}>click — 仅桌面弹窗确认</option>
+                </select>
+              </div>
+
+              <div class="toggle-grid">
+                <label class="toggle-item">
+                  <div>
+                    <div class="toggle-label">硬件编解码</div>
+                    <div class="toggle-sub">enable-hwcodec</div>
+                  </div>
+                  <input type="checkbox" class="switch-check" id="strat-hwcodec" ${s.enable_hwcodec ? 'checked' : ''} />
+                </label>
+                <label class="toggle-item">
+                  <div>
+                    <div class="toggle-label">默认启用直连服务</div>
+                    <div class="toggle-sub">direct-server (Direct IP)</div>
+                  </div>
+                  <input type="checkbox" class="switch-check" id="strat-direct" ${s.direct_server ? 'checked' : ''} />
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card" style="margin-bottom:16px;">
+          <div class="card-header">
+            <div>
+              <h3 class="card-title">会话能力权限开关</h3>
+              <div class="cell-sub">统一开启或禁用客户端会话内的音频、剪贴板、文件传输及隧道能力</div>
+            </div>
+          </div>
+          <div class="toggle-grid">
+            <label class="toggle-item">
+              <div><div class="toggle-label">远程音频传输</div><div class="toggle-sub">enable-audio</div></div>
+              <input type="checkbox" class="switch-check" id="strat-audio" ${s.enable_audio ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">剪贴板同步</div><div class="toggle-sub">enable-clipboard</div></div>
+              <input type="checkbox" class="switch-check" id="strat-clipboard" ${s.enable_clipboard ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">文件传输</div><div class="toggle-sub">enable-file-transfer</div></div>
+              <input type="checkbox" class="switch-check" id="strat-file" ${s.enable_file_transfer ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">键盘鼠标控制</div><div class="toggle-sub">enable-keyboard</div></div>
+              <input type="checkbox" class="switch-check" id="strat-keyboard" ${s.enable_keyboard ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">TCP / 端口转发隧道</div><div class="toggle-sub">enable-tunnel</div></div>
+              <input type="checkbox" class="switch-check" id="strat-tunnel" ${s.enable_tunnel ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">允许远程重启</div><div class="toggle-sub">enable-remote-restart</div></div>
+              <input type="checkbox" class="switch-check" id="strat-restart" ${s.enable_remote_restart ? 'checked' : ''} />
+            </label>
+            <label class="toggle-item">
+              <div><div class="toggle-label">允许会话录制</div><div class="toggle-sub">enable-record-session</div></div>
+              <input type="checkbox" class="switch-check" id="strat-record" ${s.enable_record_session ? 'checked' : ''} />
+            </label>
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">高级扩展键值 (extra_options)</h3>
+                <div class="cell-sub">可选 JSON 对象，用于追加官方其他 <code>config_options</code>（服务端地址与公钥键名受保护自动过滤）</div>
+              </div>
+            </div>
+            <div class="field">
+              <textarea id="strat-extra" rows="6" style="font-family:monospace;font-size:12.5px;" placeholder='{"allow-remove-wallpaper": "Y"}'>${esc(s.extra_options || '')}</textarea>
+            </div>
+            <div id="strat-extra-err" class="error-banner hidden" style="margin-top:8px;"></div>
+            <div class="row" style="margin-top:12px;justify-content:flex-end;">
+              <button class="btn btn-primary" id="btn-save-strategy-bottom">保存策略并下发客户端</button>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <div>
+                <h3 class="card-title">实时心跳策略预览 (config_options)</h3>
+                <div class="cell-sub"><code>POST /api/heartbeat</code> 实际下发给客户端的键值快照</div>
+              </div>
+              <button class="btn btn-secondary btn-sm" id="btn-copy-strategy-json">复制 JSON</button>
+            </div>
+            <pre class="code-box" id="strat-preview-json" style="margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;"></pre>
+          </div>
+        </div>
+      `;
+
+      const clamp = (v, min, max, fb) => {
+        const n = Number(v);
+        if (!Number.isFinite(n)) return fb;
+        return Math.max(min, Math.min(max, Math.round(n)));
+      };
+
+      const collectPayload = () => ({
+        enabled: $('strat-enabled').checked,
+        image_quality: $('strat-image-quality').value,
+        custom_fps: clamp($('strat-fps-num').value, 5, 120, 60),
+        custom_image_quality: clamp($('strat-quality-num').value, 10, 100, 75),
+        codec_preference: $('strat-codec').value,
+        verification_method: $('strat-verification').value,
+        approve_mode: $('strat-approve').value,
+        enable_hwcodec: $('strat-hwcodec').checked,
+        direct_server: $('strat-direct').checked,
+        enable_audio: $('strat-audio').checked,
+        enable_clipboard: $('strat-clipboard').checked,
+        enable_file_transfer: $('strat-file').checked,
+        enable_keyboard: $('strat-keyboard').checked,
+        enable_tunnel: $('strat-tunnel').checked,
+        enable_remote_restart: $('strat-restart').checked,
+        enable_record_session: $('strat-record').checked,
+        extra_options: $('strat-extra').value.trim(),
+      });
+
+      const refreshPreview = () => {
+        const p = collectPayload();
+        const badge = $('strat-status-badge');
+        badge.className = `badge ${p.enabled ? 'badge-green' : 'badge-gray'}`;
+        badge.textContent = p.enabled ? '已启用下发' : '已暂停下发';
+
+        area.querySelectorAll('.preset-card').forEach((card) => {
+          const item = presets.find((x) => x.id === card.dataset.presetId);
+          const matched = item && p.image_quality === item.quality && p.custom_fps === item.fps && p.custom_image_quality === item.imgQ;
+          card.classList.toggle('active', Boolean(matched));
+        });
+
+        const boolStr = (b) => (b ? 'Y' : 'N');
+        const opts = {
+          'image-quality': p.image_quality,
+          'custom-fps': String(p.custom_fps),
+          'custom-image-quality': String(p.custom_image_quality),
+          'enable-hwcodec': boolStr(p.enable_hwcodec),
+          'enable-audio': boolStr(p.enable_audio),
+          'enable-clipboard': boolStr(p.enable_clipboard),
+          'enable-file-transfer': boolStr(p.enable_file_transfer),
+          'enable-keyboard': boolStr(p.enable_keyboard),
+          'enable-tunnel': boolStr(p.enable_tunnel),
+          'enable-remote-restart': boolStr(p.enable_remote_restart),
+          'enable-record-session': boolStr(p.enable_record_session),
+          'direct-server': boolStr(p.direct_server),
+        };
+        if (p.codec_preference && p.codec_preference !== 'auto') {
+          opts['codec-preference'] = p.codec_preference;
+        }
+        if (p.verification_method) opts['verification-method'] = p.verification_method;
+        if (p.approve_mode) opts['approve-mode'] = p.approve_mode;
+
+        const errEl = $('strat-extra-err');
+        errEl.classList.add('hidden');
+        errEl.textContent = '';
+        if (p.extra_options) {
+          try {
+            const parsed = JSON.parse(p.extra_options);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('extra_options 必须是 JSON 对象，例如 {"key": "value"}');
+            }
+            const protectedKeys = new Set(['api-server', 'key', 'custom-rendezvous-server', 'relay-server', 'rendezvous-servers']);
+            Object.entries(parsed).forEach(([k, v]) => {
+              const key = String(k || '').trim();
+              if (!key || protectedKeys.has(key.toLowerCase()) || v === null || v === undefined) return;
+              opts[key] = typeof v === 'boolean' ? boolStr(v) : String(v);
+            });
+          } catch (e) {
+            errEl.textContent = `JSON 格式错误: ${e.message}`;
+            errEl.classList.remove('hidden');
+          }
+        }
+        $('strat-preview-json').textContent = JSON.stringify({ config_options: opts }, null, 2);
+      };
+
+      const bindSliderPair = (rangeId, numId, min, max, fb) => {
+        $(rangeId).oninput = () => {
+          $(numId).value = $(rangeId).value;
+          refreshPreview();
+        };
+        $(numId).oninput = () => {
+          const val = clamp($(numId).value, min, max, fb);
+          $(rangeId).value = String(val);
+          refreshPreview();
+        };
+        $(numId).onblur = () => {
+          const val = clamp($(numId).value, min, max, fb);
+          $(numId).value = String(val);
+          $(rangeId).value = String(val);
+          refreshPreview();
+        };
+      };
+
+      bindSliderPair('strat-fps', 'strat-fps-num', 5, 120, 60);
+      bindSliderPair('strat-quality', 'strat-quality-num', 10, 100, 75);
+
+      area.querySelectorAll('.preset-card').forEach((card) => {
+        card.onclick = () => {
+          const preset = presets.find((x) => x.id === card.dataset.presetId);
+          if (!preset) return;
+          $('strat-image-quality').value = preset.quality;
+          $('strat-fps').value = String(preset.fps);
+          $('strat-fps-num').value = String(preset.fps);
+          $('strat-quality').value = String(preset.imgQ);
+          $('strat-quality-num').value = String(preset.imgQ);
+          refreshPreview();
+        };
+      });
+
+      [
+        'strat-enabled', 'strat-image-quality', 'strat-codec',
+        'strat-verification', 'strat-approve', 'strat-hwcodec',
+        'strat-direct', 'strat-audio', 'strat-clipboard',
+        'strat-file', 'strat-keyboard', 'strat-tunnel',
+        'strat-restart', 'strat-record', 'strat-extra',
+      ].forEach((id) => {
+        $(id).addEventListener('input', refreshPreview);
+        $(id).addEventListener('change', refreshPreview);
+      });
+
+      const saveStrategy = async () => {
+        const payload = collectPayload();
+        if (payload.extra_options) {
+          try {
+            const parsed = JSON.parse(payload.extra_options);
+            if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+              throw new Error('extra_options 必须是 JSON 对象');
+            }
+          } catch (e) {
+            toast(`高级扩展参数格式无效: ${e.message}`, 'err');
+            return;
+          }
+        }
+        const topBtn = $('btn-save-strategy');
+        const botBtn = $('btn-save-strategy-bottom');
+        [topBtn, botBtn].forEach((b) => { if (b) b.disabled = true; });
+        try {
+          const saved = await api('/admin/api/client-strategy', {
+            method: 'PUT',
+            body: JSON.stringify(payload),
+          });
+          const savedStrat = saved.strategy || {};
+          $('strat-version-badge').textContent = `版本 ${savedStrat.strategy_modified_at || 0}`;
+          if (savedStrat.strategy_modified_at) {
+            $('strat-mod-time').textContent = new Date(savedStrat.strategy_modified_at * 1000).toLocaleString('zh-CN', { hour12: false });
+          }
+          $('strat-preview-json').textContent = JSON.stringify({ config_options: saved.config_options || {} }, null, 2);
+          toast('客户端策略已保存，设备将在下次心跳同步', 'ok');
+        } catch (err) {
+          toast(err.message, 'err');
+        } finally {
+          [topBtn, botBtn].forEach((b) => { if (b) b.disabled = false; });
+        }
+      };
+
+      $('btn-save-strategy').onclick = saveStrategy;
+      $('btn-save-strategy-bottom').onclick = saveStrategy;
+      $('btn-copy-strategy-json').onclick = () => copyText($('strat-preview-json').textContent, '已复制策略 config_options JSON');
+
+      refreshPreview();
     } catch (err) {
       area.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
     }

@@ -209,6 +209,8 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 			protected.GET("/smtp", adminSysH.GetSMTP)
 			protected.PUT("/smtp", adminSysH.UpdateSMTP)
 			protected.POST("/smtp/test", adminSysH.TestSMTP)
+			protected.GET("/client-strategy", adminSysH.GetClientStrategy)
+			protected.PUT("/client-strategy", adminSysH.UpdateClientStrategy)
 
 			protected.GET("/system/server-config", adminSysH.ServerConfig)
 			protected.GET("/system/updates", adminSysH.OfficialUpdates)

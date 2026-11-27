@@ -31,10 +31,15 @@
 
 ## 核心特性
 
+- **Docker 一键部署 & 多架构预构建镜像**
+  - GitHub Actions 自动构建 `linux/amd64` / `linux/arm64` 镜像并发布至 `ghcr.io/echolunet/rustdesk-api:latest`，默认 `docker-compose.yml` 无需本地安装 Go 编译器或拉取源码即可直接启动。
+  - 提供交互式一键部署脚本 `scripts/install.sh`：自动识别服务器公网 IP、配置默认帧率（30 / 60 / 120 FPS）、生成 `.env` 并输出后台地址、初始密码与官方公钥。
 - **官方服务端解耦 & 一键更新**
   - `hbbs`、`hbbr` 直接采用官方镜像 `rustdesk/rustdesk-server:latest` 并默认开启 `-k _` 公钥强校验，密钥持久化在 `./data/server`。
   - 支持 `./scripts/update.sh` 手动更新或启用 Watchtower 定时自动拉取官方最新版，升级过程不丢失任何密钥或数据。
   - 管理后台内置**官方版本检测中心**，实时展示 `rustdesk/rustdesk` 客户端与 `rustdesk/rustdesk-server` 最新 Release 及下载入口。
+- **客户端默认策略下发（帧率 FPS / 画质 / 权限）**
+  - 支持在 `.env`（如 `CLIENT_DEFAULT_FPS=60`）与管理后台 **「客户端策略」** 集中配置默认帧率（`5–120 FPS`）、图像质量、首选编解码器（VP9 / VP8 / H.264 / H.265 / AV1）、硬件编解码与会话权限开关，并通过 `/api/heartbeat` 自动下发至客户端。
 - **完整兼容 RustDesk 客户端协议**
   - **认证与会话**：`/api/login`、`/api/logout`、`/api/currentUser`（JWT 持久化会话，支持管理员主动踢下线）。
   - **地址簿与标签**：完整支持 Legacy v1（`/api/ab`、`/api/ab/get`）与 Modern v2 个人/共享地址簿（`/api/ab/personal`、`/api/ab/shared/profiles`、`/api/ab/peers`、`/api/ab/tags/:guid`、`/api/ab/peer/*`、`/api/ab/tag/*`、`/api/ab/settings`），双向同步。
@@ -56,29 +61,60 @@
 
 ## 快速部署
 
-### 1. 克隆项目并配置环境变量
+### 方式一：一条命令一键部署（推荐）
+
+在任意已安装 Docker 与 Docker Compose v2 的 Linux VPS 上执行：
 
 ```bash
-git clone https://github.com/echolunet/rustdesk-api.git
-cd rustdesk-api
-cp .env.example .env
+curl -fsSL https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts/install.sh | bash
 ```
 
-编辑 `.env`，将以下三项修改为你的服务器公网 IP 或域名：
+脚本将自动探测公网 IP、交互式选择默认远程帧率（`60 FPS` / `120 FPS` / `30 FPS` / 自定义），拉取官方 `hbbs`/`hbbr` 与预构建 API 镜像启动全套服务，并输出后台地址、初始密码和官方 Public Key。若尚未开放 GHCR 公开访问或镜像未构建完成，脚本也会在检测到 `git` 时自动回退为源码本地构建。
+
+> 支持非交互自动化传参：
+> ```bash
+> SERVER_HOST=your.domain.com DEFAULT_FPS=120 NON_INTERACTIVE=1 \
+>   curl -fsSL https://raw.githubusercontent.com/echolunet/rustdesk-api/main/scripts/install.sh | bash
+> ```
+
+### 方式二：仅 Compose 直接拉取预构建镜像
+
+无需克隆整个仓库或编译源码，仅下载编排与配置模板即可启动：
+
+```bash
+mkdir -p rustdesk-api && cd rustdesk-api
+curl -fsSLO https://raw.githubusercontent.com/echolunet/rustdesk-api/main/docker-compose.yml
+curl -fsSL https://raw.githubusercontent.com/echolunet/rustdesk-api/main/.env.example -o .env
+```
+
+编辑 `.env` 修改公网地址与默认帧率（其余 `CLIENT_*` 参数可按需调整）：
 
 ```env
 RUSTDESK_ID_SERVER=your.domain.com:21116
 RUSTDESK_RELAY_SERVER=your.domain.com:21117
 RUSTDESK_API_SERVER=http://your.domain.com:21114
+CLIENT_DEFAULT_FPS=60
 ```
 
-> 国内服务器若构建时拉取 Go 依赖较慢，可在 `.env` 中设置 `GOPROXY=https://goproxy.cn,direct`。
-
-### 2. 启动服务
+拉取并启动：
 
 ```bash
-chmod +x scripts/update.sh scripts/sync-webclient.sh
-docker compose up -d --build
+docker compose pull && docker compose up -d
+```
+
+> **提示**：仓库首次推送触发 `Docker Publish` workflow 后，请在 GitHub Packages 将 `rustdesk-api` 的包可见性设为 **Public**，此后任意服务器均可免登录直接 `docker compose pull`。
+
+### 方式三：从源码本地构建
+
+如需自行修改 Go 代码或自定义构建，可克隆仓库并叠加 `docker-compose.build.yml`：
+
+```bash
+git clone https://github.com/echolunet/rustdesk-api.git
+cd rustdesk-api
+cp .env.example .env
+# 编辑 .env 填入公网地址与默认参数（国内服务器可设置 GOPROXY=https://goproxy.cn,direct）
+chmod +x scripts/*.sh
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 ```
 
 ### 3. 放行防火墙 / 安全组端口
@@ -127,20 +163,38 @@ cat ./data/server/id_ed25519.pub
 
 ---
 
+## 客户端默认策略下发（帧率 / 画质 / 权限）
+
+首次启动时会从 `.env` 读取默认客户端策略写入数据库，之后随时可在 Web 控制台 **「客户端策略」** 实时修改并保存，系统会自动递增策略版本时间戳，在线客户端在下次 `/api/heartbeat` 心跳（通常 15 秒内）自动拉取生效：
+
+| 环境变量 | 默认值 | 说明 |
+| :--- | :--- | :--- |
+| `CLIENT_STRATEGY_ENABLED` | `true` | 是否在心跳中启用默认策略下发 |
+| `CLIENT_DEFAULT_IMAGE_QUALITY` | `custom` | 默认画质模式（设为 `custom` 时自定义帧率才生效） |
+| `CLIENT_DEFAULT_FPS` | `60` | 默认传输帧率上限（范围 `5–120`） |
+| `CLIENT_DEFAULT_QUALITY` | `75` | 自定义画质百分比（范围 `10–100`） |
+| `CLIENT_DEFAULT_CODEC` | `auto` | 首选编解码器（`auto` / `vp9` / `vp8` / `h264` / `h265` / `av1`） |
+| `CLIENT_ENABLE_HWCODEC` / `AUDIO` / `CLIPBOARD` / `FILE_TRANSFER` / `KEYBOARD` / `TUNNEL` / `REMOTE_RESTART` / `RECORD_SESSION` | 见 `.env.example` | 对应客户端硬解、音频、剪贴板、文件传输等默认权限开关 |
+| `CLIENT_DIRECT_SERVER` | `false` | 是否默认开启直连服务器 |
+
+---
+
 ## 更新官方服务端与 API
 
 ### 手动更新
 
 ```bash
 ./scripts/update.sh                # 仅拉取最新官方 rustdesk/rustdesk-server (hbbs & hbbr)
-./scripts/update.sh --rebuild-api  # 重建本地 rustdesk-api 容器并更新官方服务端
-./scripts/update.sh --all          # 拉取最新代码 + 重建 API + 更新官方服务端
+./scripts/update.sh --pull-api     # 同时拉取最新 GHCR 预构建 rustdesk-api 镜像并重启
+./scripts/update.sh --rebuild-api  # 源码部署场景：本地重新构建 rustdesk-api 并更新官方服务端
+./scripts/update.sh --all          # 拉取最新代码 + 更新/重启 API + 更新官方服务端
 ```
 
 Windows PowerShell：
 ```powershell
 .\scripts\update.ps1               # 更新官方 hbbs & hbbr
-.\scripts\update.ps1 -RebuildApi   # 同时重建 API 容器
+.\scripts\update.ps1 -PullApi      # 拉取最新 GHCR 预构建 API 镜像并重启
+.\scripts\update.ps1 -RebuildApi   # 源码本地重建 API 容器并更新
 ```
 
 ### 自动定时更新官方 `hbbs` & `hbbr`
