@@ -32,12 +32,12 @@ type gzipResponseWriter struct {
 }
 
 func (w *gzipResponseWriter) WriteHeader(code int) {
-	if w.wroteHeader {
+	if code <= 0 || w.wroteHeader {
 		return
 	}
 	w.status = code
 	w.wroteHeader = true
-	if code < 200 || code == http.StatusNoContent || code == http.StatusNotModified {
+	if code < 200 || (code >= 300 && code < 400) || code == http.StatusNoContent {
 		w.decided = true
 		w.compress = false
 		w.ResponseWriter.WriteHeader(code)

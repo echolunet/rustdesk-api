@@ -23,6 +23,10 @@
   };
 
   const $ = (id) => document.getElementById(id);
+  const on = (id, evt, fn) => {
+    const el = $(id);
+    if (el) el.addEventListener(evt, fn);
+  };
 
   function esc(v) {
     return String(v ?? '')
@@ -375,20 +379,20 @@
 
   initOTPBoxes();
 
-  $('btn-theme').addEventListener('click', () => {
+  on('btn-theme', 'click', () => {
     const cur = document.documentElement.getAttribute('data-theme');
     applyTheme(cur === 'dark' ? 'light' : 'dark');
   });
 
-  $('btn-menu').addEventListener('click', openSidebar);
-  $('sidebar-backdrop').addEventListener('click', closeSidebar);
+  on('btn-menu', 'click', openSidebar);
+  on('sidebar-backdrop', 'click', closeSidebar);
 
-  $('btn-toggle-pw').addEventListener('click', () => {
+  on('btn-toggle-pw', 'click', () => {
     const input = $('login-password');
     input.type = input.type === 'password' ? 'text' : 'password';
   });
 
-  $('login-form').addEventListener('submit', async (e) => {
+  on('login-form', 'submit', async (e) => {
     e.preventDefault();
     const errEl = $('login-error');
     const submitBtn = $('btn-login-submit');
@@ -422,7 +426,7 @@
     }
   });
 
-  $('btn-toggle-recovery').addEventListener('click', () => {
+  on('btn-toggle-recovery', 'click', () => {
     if (!state.pendingLogin) return;
     state.pendingLogin.useRecovery = !state.pendingLogin.useRecovery;
     const useRec = state.pendingLogin.useRecovery;
@@ -432,7 +436,7 @@
     if (useRec) $('login-recovery-input').focus();
   });
 
-  $('btn-resend-email').addEventListener('click', async () => {
+  on('btn-resend-email', 'click', async () => {
     if (!state.pendingLogin) return;
     $('login-otp-error').classList.add('hidden');
     try {
@@ -451,9 +455,9 @@
     }
   });
 
-  $('btn-otp-back').addEventListener('click', resetLoginSteps);
+  on('btn-otp-back', 'click', resetLoginSteps);
 
-  $('login-otp-form').addEventListener('submit', async (e) => {
+  on('login-otp-form', 'submit', async (e) => {
     e.preventDefault();
     if (!state.pendingLogin) return;
     const errEl = $('login-otp-error');
@@ -498,9 +502,9 @@
     }
   });
 
-  $('btn-logout').addEventListener('click', logout);
-  $('modal-close').addEventListener('click', closeModal);
-  $('modal-backdrop').addEventListener('click', (e) => {
+  on('btn-logout', 'click', logout);
+  on('modal-close', 'click', closeModal);
+  on('modal-backdrop', 'click', (e) => {
     if (e.target === $('modal-backdrop')) closeModal();
   });
   document.addEventListener('keydown', (e) => {
@@ -510,7 +514,7 @@
     }
   });
 
-  $('btn-change-pw').addEventListener('click', () => {
+  on('btn-change-pw', 'click', () => {
     openModal(
       '修改管理员密码',
       `<form id="form-pw" class="stack">
@@ -537,7 +541,7 @@
     );
   });
 
-  $('sidebar-nav').addEventListener('click', (e) => {
+  on('sidebar-nav', 'click', (e) => {
     const btn = e.target.closest('.nav-item');
     if (!btn) return;
     closeSidebar();

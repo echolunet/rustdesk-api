@@ -77,6 +77,9 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 	r.GET("/", func(c *gin.Context) {
 		c.Redirect(http.StatusFound, "/_admin/")
 	})
+	r.GET("/admin", func(c *gin.Context) {
+		c.Redirect(http.StatusFound, "/_admin/")
+	})
 	if subFS, err := fs.Sub(web.AdminFS, "admin"); err == nil {
 		r.GET("/_admin/*filepath", serveEmbeddedAdmin(subFS))
 	}
@@ -228,13 +231,14 @@ func New(db *gorm.DB, cfg *config.Config) *gin.Engine {
 type embeddedAsset struct {
 	raw         []byte
 	gz          []byte
+	hash        string
 	etag        string
 	contentType string
-	cacheCtrl   string
 }
 
 func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
-	assets := make(map[string]embeddedAsset, 8)
+	rawFiles := make(map[string][]byte, 8)
+	hashes := make(map[string]string, 8)
 	_ = fs.WalkDir(subFS, ".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return nil
@@ -243,16 +247,34 @@ func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
 		if readErr != nil {
 			return nil
 		}
+		rawFiles[path] = raw
+		sum := sha256.Sum256(raw)
+		hashes[path] = hex.EncodeToString(sum[:8])
+		return nil
+	})
+
+	if rawIndex, ok := rawFiles["index.html"]; ok {
+		htmlStr := string(rawIndex)
+		if cssHash := hashes["app.css"]; cssHash != "" {
+			htmlStr = strings.ReplaceAll(htmlStr, "./app.css", "./app.css?v="+cssHash)
+		}
+		if jsHash := hashes["app.js"]; jsHash != "" {
+			htmlStr = strings.ReplaceAll(htmlStr, "./app.js", "./app.js?v="+jsHash)
+		}
+		rewritten := []byte(htmlStr)
+		rawFiles["index.html"] = rewritten
+		sum := sha256.Sum256(rewritten)
+		hashes["index.html"] = hex.EncodeToString(sum[:8])
+	}
+
+	assets := make(map[string]embeddedAsset, len(rawFiles))
+	for path, raw := range rawFiles {
 		ctype := mime.TypeByExtension(filepath.Ext(path))
 		if ctype == "" {
 			ctype = http.DetectContentType(raw)
 		}
-		sum := sha256.Sum256(raw)
-		etag := `"` + hex.EncodeToString(sum[:8]) + `"`
-		cacheCtrl := "public, max-age=3600"
-		if path == "index.html" {
-			cacheCtrl = "no-cache"
-		}
+		hash := hashes[path]
+		etag := `"` + hash + `"`
 
 		var gzBytes []byte
 		if len(raw) >= 256 {
@@ -271,12 +293,11 @@ func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
 		assets[path] = embeddedAsset{
 			raw:         raw,
 			gz:          gzBytes,
+			hash:        hash,
 			etag:        etag,
 			contentType: ctype,
-			cacheCtrl:   cacheCtrl,
 		}
-		return nil
-	})
+	}
 
 	return func(c *gin.Context) {
 		p := strings.TrimSpace(strings.TrimPrefix(c.Param("filepath"), "/"))
@@ -289,16 +310,23 @@ func serveEmbeddedAdmin(subFS fs.FS) gin.HandlerFunc {
 		}
 
 		asset, ok := assets[p]
+		servedName := p
 		if !ok {
 			asset, ok = assets["index.html"]
+			servedName = "index.html"
 			if !ok {
 				c.Status(http.StatusNotFound)
 				return
 			}
 		}
 
+		cacheCtrl := "no-cache"
+		if servedName != "index.html" && asset.hash != "" && c.Query("v") == asset.hash {
+			cacheCtrl = "public, max-age=31536000, immutable"
+		}
+
 		c.Header("ETag", asset.etag)
-		c.Header("Cache-Control", asset.cacheCtrl)
+		c.Header("Cache-Control", cacheCtrl)
 		if len(asset.gz) > 0 {
 			c.Header("Vary", "Accept-Encoding")
 		}

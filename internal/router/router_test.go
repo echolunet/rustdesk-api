@@ -549,6 +549,29 @@ func TestClientStrategyHeartbeatPush(t *testing.T) {
 func TestPerformanceCachesAndCompression(t *testing.T) {
 	srv, _ := setupTestServer(t)
 
+	// 0. Root and /admin redirects remain intact under Gzip middleware
+	for _, p := range []string{"/", "/admin"} {
+		redirReq := httptest.NewRequest(http.MethodGet, p, nil)
+		redirReq.Header.Set("Accept-Encoding", "gzip")
+		redirRec := httptest.NewRecorder()
+		srv.ServeHTTP(redirRec, redirReq)
+		if redirRec.Code != http.StatusFound || redirRec.Header().Get("Location") != "/_admin/" {
+			t.Fatalf("expected 302 redirect to /_admin/ for %s, got %d (%q)", p, redirRec.Code, redirRec.Header().Get("Location"))
+		}
+	}
+
+	// 0b. Embedded index.html carries cache-busted app.css?v= and app.js?v=
+	idxReq := httptest.NewRequest(http.MethodGet, "/_admin/", nil)
+	idxRec := httptest.NewRecorder()
+	srv.ServeHTTP(idxRec, idxReq)
+	if idxRec.Code != http.StatusOK {
+		t.Fatalf("expected 200 on /_admin/, got %d", idxRec.Code)
+	}
+	idxHTML := idxRec.Body.String()
+	if !strings.Contains(idxHTML, "./app.css?v=") || !strings.Contains(idxHTML, "./app.js?v=") {
+		t.Fatalf("expected cache-busted asset links in /_admin/ index.html")
+	}
+
 	// 1. Pre-compressed embedded Web Admin static asset with ETag & 304 Not Modified
 	req := httptest.NewRequest(http.MethodGet, "/_admin/app.js", nil)
 	req.Header.Set("Accept-Encoding", "gzip")
