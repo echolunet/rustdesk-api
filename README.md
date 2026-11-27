@@ -55,7 +55,7 @@
   - 支持 `./scripts/update.sh` 手动更新或启用 Watchtower Profile 定时自动拉取官方最新版，升级过程不丢失任何密钥或数据。
   - 管理后台内置**官方版本检测中心**，实时展示 `rustdesk/rustdesk` 客户端与 `rustdesk/rustdesk-server` 最新 Release 及下载入口。
 - **客户端默认策略下发（帧率 FPS / 画质 / 权限）**
-  - 支持在 `.env`（如 `CLIENT_DEFAULT_FPS=60`）与管理后台 **「客户端策略」** 集中配置默认帧率（`5–120 FPS`）、图像质量、首选编解码器（VP9 / VP8 / H.264 / H.265 / AV1）、硬件编解码与会话权限开关，并通过 `/api/heartbeat` 增量下发至客户端。
+  - 支持在 `.env`（如 `CLIENT_DEFAULT_FPS=60`）与管理后台 **「设置 → 客户端策略」** 集中配置默认帧率（`5–120 FPS`）、图像质量、首选编解码器（VP9 / VP8 / H.264 / H.265 / AV1）、硬件编解码与会话权限开关，并通过 `/api/heartbeat` 增量下发至客户端。
 - **完整兼容 RustDesk 客户端协议**
   - **认证与会话**：`/api/login`、`/api/logout`、`/api/currentUser`（JWT 持久化会话 + 内存短期缓存，撤销立即生效）。
   - **地址簿与标签**：完整支持 Legacy v1（`/api/ab`、`/api/ab/get`）与 Modern v2 个人/共享地址簿（`/api/ab/personal`、`/api/ab/shared/profiles`、`/api/ab/peers`、`/api/ab/tags/:guid`、`/api/ab/peer/*`、`/api/ab/tag/*`、`/api/ab/settings`），双向同步。
@@ -162,7 +162,7 @@ docker logs rustdesk-api
 cat ./data/server/id_ed25519.pub
 ```
 
-浏览器访问 `http://<你的服务器IP>:21114/_admin/` 登录管理后台并及时修改初始密码。
+浏览器访问 `http://<你的服务器IP>:21114`（自动跳转至 `/_admin/`）登录管理后台并及时修改初始密码。
 
 ---
 
@@ -234,7 +234,7 @@ docker compose logs -f rustdesk-api hbbs hbbr
 
 ## 客户端配置与扫码导入
 
-登录管理后台 **「概览仪表盘」** 或 **「配置与官方更新」**，支持三种方式配置 RustDesk 客户端：
+登录管理后台 **「概览」**，支持三种方式配置 RustDesk 客户端：
 
 1. **手机端扫码**：打开 RustDesk App「网络设置」→ 点击右上角扫码图标，直接扫描后台生成的配置二维码。
 2. **桌面端一键导入**：复制后台生成的「一键配置导入字符串」，或通过 CLI 静默部署：
@@ -247,7 +247,7 @@ docker compose logs -f rustdesk-api hbbs hbbr
 
 ## 客户端默认策略下发（帧率 / 画质 / 权限）
 
-首次启动时会从 `.env` 读取默认客户端策略写入数据库，之后随时可在 Web 控制台 **「客户端策略」** 实时修改并保存，系统会自动递增策略版本时间戳，在线客户端在下次 `/api/heartbeat` 心跳（通常 15 秒内）自动拉取生效：
+首次启动时会从 `.env` 读取默认客户端策略写入数据库，之后随时可在 Web 控制台 **「设置 → 客户端策略」** 实时修改并保存，系统会自动递增策略版本时间戳，在线客户端在下次 `/api/heartbeat` 心跳（通常 15 秒内）自动拉取生效：
 
 | 环境变量 | 默认值 | 说明 |
 | :--- | :--- | :--- |
@@ -263,38 +263,178 @@ docker compose logs -f rustdesk-api hbbs hbbr
 
 ## 安全功能配置（2FA / 邮箱登录验证）
 
-1. **开启 TOTP 两步验证**：在后台左侧菜单进入 **「安全与验证 (2FA)」** → 点击 **「立即开启 2FA」** → 使用验证器 App 扫描二维码并输入 6 位动态码，同时保存生成的 6 个一次性备用恢复码。
-2. **开启 SMTP 邮箱验证**：在同一页面填写 SMTP 服务器（支持 `STARTTLS` / `SSL` / 无加密），先发送测试邮件验证连通性，再选择全局验证策略（**关闭** / **仅新设备首次登录验证** / **每次登录验证**）或前往 **「用户与分组」** 为单个用户单独开启「强制邮箱验证」。
-3. **管理员应急重置**：若用户更换或丢失验证器手机，管理员可在 **「用户与分组」** 中点击该用户的 **「重置 2FA」**。
+1. **开启 TOTP 两步验证**：在后台左侧菜单进入 **「安全」** → 点击 **「立即开启 2FA」** → 使用验证器 App 扫描二维码并输入 6 位动态码，同时保存生成的 6 个一次性备用恢复码。
+2. **开启 SMTP 邮箱验证**：在同一页面填写 SMTP 服务器（支持 `STARTTLS` / `SSL` / 无加密），先发送测试邮件验证连通性，再选择全局验证策略（**关闭** / **仅新设备首次登录验证** / **每次登录验证**）或前往 **「用户」** 为单个用户单独开启「强制邮箱验证」。
+3. **管理员应急重置**：若用户更换或丢失验证器手机，管理员可在 **「用户」** 中点击该用户的 **「重置 2FA」**。
 
 ---
 
 ## 更新官方服务端与 API
 
-### 手动更新
+### 更新逻辑与数据安全保障
+
+- **完全解耦、独立升级**：自研 `rustdesk-api`（账户、设备、地址簿、2FA、策略、Web 管理台）与官方 `rustdesk-server`（`hbbs` 信令 + `hbbr` 中继）彼此解耦，可**仅更新官方服务端**、**仅更新 API**，或**一起更新**。
+- **持久化隔离（升级不丢数据、不换公钥）**：
+  - `./data/server`（或非 Docker 时 `hbbs`/`hbbr` 的工作目录）：保存 `id_ed25519` / `id_ed25519.pub` 密钥对及 `db_v2.sqlite3`。只要保留该目录，升级 `hbbs`/`hbbr` 后所有客户端**无需重新配置公钥**。
+  - `./data/api`（`DATA_DIR`）：保存 SQLite 数据库 `rustdesk-api.db`（或外部 MySQL/PostgreSQL）及 `.jwt_secret`。新版 `rustdesk-api` 启动时通过 GORM `AutoMigrate` 自动向后兼容迁移表结构，用户、设备、地址簿、2FA、客户端策略与登录态全部保留。
+- **前端自动防缓存**：Web 管理台（`/_admin/`）内嵌于 `rustdesk-api` 二进制并自动注入资源指纹 `?v=<hash>`，升级 API 后直接刷新浏览器即可生效。
+- **目录提醒**：若使用 `scripts/install.sh` 一键部署且触发了源码回退构建，实际部署目录为 `/opt/rustdesk-api/src`（预构建镜像模式为 `/opt/rustdesk-api`）；执行更新前请先 `cd` 到包含 `.env` 和 `./data/` 的实际目录。
+
+### 一、Docker 预构建镜像模式更新（GHCR / 阿里云 ACR）
+
+#### 1. 使用内置脚本一键更新
 
 ```bash
-./scripts/update.sh                # 仅拉取最新官方 rustdesk/rustdesk-server (hbbs & hbbr)
-./scripts/update.sh --pull-api     # 同时拉取最新 GHCR 预构建 rustdesk-api 镜像并重启
-./scripts/update.sh --rebuild-api  # 源码部署场景：本地重新构建 rustdesk-api 并更新官方服务端
-./scripts/update.sh --all          # 拉取最新代码 + 更新/重启 API + 更新官方服务端
+# Linux / macOS
+./scripts/update.sh            # 仅拉取并更新官方 rustdesk/rustdesk-server (hbbs & hbbr)
+./scripts/update.sh --pull-api # 拉取最新预构建 rustdesk-api 镜像 + 更新官方 hbbs & hbbr
+./scripts/update.sh --all      # Git 仓库场景先 git pull --ff-only，再拉取最新 API 与官方服务端镜像
 ```
-
-Windows PowerShell：
 
 ```powershell
-.\scripts\update.ps1               # 更新官方 hbbs & hbbr
-.\scripts\update.ps1 -PullApi      # 拉取最新 GHCR 预构建 API 镜像并重启
-.\scripts\update.ps1 -RebuildApi   # 源码本地重建 API 容器并更新
+# Windows PowerShell
+.\scripts\update.ps1           # 仅更新官方 hbbs & hbbr
+.\scripts\update.ps1 -PullApi  # 拉取最新预构建 rustdesk-api 镜像并更新官方服务端
 ```
 
-### 自动定时更新官方 `hbbs` & `hbbr`
+#### 2. 原生 `docker compose` 命令（不依赖脚本）
+
+```bash
+cd /opt/rustdesk-api   # 切换到包含 docker-compose.yml 和 .env 的目录
+
+# 仅更新官方 RustDesk Server（hbbs & hbbr）
+docker compose pull hbbs hbbr
+docker compose up -d --no-deps hbbs hbbr
+
+# 仅更新 rustdesk-api
+docker compose pull rustdesk-api
+docker compose up -d --no-deps rustdesk-api
+
+# 全部一起更新并清理悬空旧镜像
+docker compose pull
+docker compose up -d --remove-orphans
+docker image prune -f
+```
+
+> 若启用了内置 Nginx 反代，请将 `docker compose up -d` 替换为 `docker compose --profile nginx up -d`。国内 VPS 在 `.env` 中配置好 `API_IMAGE`（如阿里云 ACR 或 `ghcr.nju.edu.cn`）及 `RUSTDESK_SERVER_IMAGE` 后，拉取命令会自动走加速源。
+
+### 二、Docker 源码本地构建模式更新（`docker-compose.build.yml`）
+
+适用于通过 `git clone` 部署，或一键脚本自动回退到 `/opt/rustdesk-api/src` 本地构建的场景。
+
+#### 1. 使用内置脚本
+
+```bash
+# Linux / macOS：拉取最新源码 + 重新编译 rustdesk-api + 拉取最新官方 hbbs & hbbr
+./scripts/update.sh --git-pull --rebuild-api
+```
+
+```powershell
+# Windows PowerShell
+git pull --ff-only
+.\scripts\update.ps1 -RebuildApi
+```
+
+#### 2. 原生 `git` + `docker compose` 命令
+
+```bash
+cd /opt/rustdesk-api/src   # 或你克隆仓库的源码目录
+
+# 仅更新代码并重新构建 rustdesk-api
+git pull --ff-only origin main
+docker compose -f docker-compose.yml -f docker-compose.build.yml build --pull rustdesk-api
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --no-deps rustdesk-api
+
+# 同时更新官方 hbbs/hbbr 与源码重建 rustdesk-api
+git pull --ff-only origin main
+docker compose -f docker-compose.yml -f docker-compose.build.yml pull hbbs hbbr
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build --remove-orphans
+docker image prune -f
+```
+
+### 三、Docker 定时自动更新官方 `hbbs` & `hbbr`（Watchtower）
 
 ```bash
 docker compose --profile auto-update up -d
 ```
 
-仅带有 `com.centurylinklabs.watchtower.enable=true` 标签的官方 `hbbs`/`hbbr` 容器会自动更新。
+编排通过容器标签做了隔离：仅带有 `com.centurylinklabs.watchtower.enable=true` 的官方 `hbbs`/`hbbr` 会按 `WATCHTOWER_INTERVAL`（默认 `86400` 秒 / 24 小时）自动追踪最新官方镜像；`rustdesk-api` 默认标记为 `false`，避免业务 API 无人值守变更。
+
+### 四、原始 / 非 Docker 部署更新（宿主机二进制 / `systemd` / `pm2`）
+
+#### 1. 更新 `rustdesk-api`（Go 源码重新编译替换二进制）
+
+更新逻辑：`git pull` 拉取最新代码 → 编译静态单二进制（内嵌最新 Web 控制台）→ 备份旧二进制 → 停止服务并替换可执行文件 → 重启服务（原有 `DATA_DIR` 下的数据库与 `.jwt_secret` 自动保留并迁移）。
+
+```bash
+cd /opt/rustdesk-api-src   # 你的 Go 源码目录（需 Go 1.24+）
+git pull --ff-only origin main
+
+# 编译新版单二进制（海外服务器可省略 GOPROXY）
+CGO_ENABLED=0 GOPROXY=https://goproxy.cn,direct \
+  go build -trimpath -ldflags="-s -w" -o rustdesk-api.new ./cmd/server
+
+# 停止服务、备份旧程序、替换并重启（以 systemd 为例）
+sudo systemctl stop rustdesk-api
+[ -f /usr/local/bin/rustdesk-api ] && sudo cp /usr/local/bin/rustdesk-api /usr/local/bin/rustdesk-api.bak
+sudo mv rustdesk-api.new /usr/local/bin/rustdesk-api
+sudo chmod +x /usr/local/bin/rustdesk-api
+sudo systemctl start rustdesk-api
+sudo systemctl status rustdesk-api --no-pager
+```
+
+> 若使用 `pm2` 托管，替换二进制后执行 `pm2 restart rustdesk-api` 即可。
+
+#### 2. 更新官方 RustDesk Server（原生 `hbbs` & `hbbr` 二进制）
+
+更新逻辑：从官方 [rustdesk/rustdesk-server Releases](https://github.com/rustdesk/rustdesk-server/releases) 下载对应架构压缩包 → 停止 `hbbs`/`hbbr` → **仅替换可执行文件，切勿删除工作目录下的 `id_ed25519`、`id_ed25519.pub` 与 `db_v2.sqlite3`** → 按原参数（如 `hbbs -r <公网IP>:21117 -k _`、`hbbr -k _`）重启服务。
+
+```bash
+ARCH="amd64"   # ARM64 服务器改为 arm64v8
+TMP_DIR="$(mktemp -d)"
+
+# 下载官方最新 Release 压缩包并解压（国内服务器可在 URL 前加 https://gh-proxy.com/）
+curl -fL "https://github.com/rustdesk/rustdesk-server/releases/latest/download/rustdesk-server-linux-${ARCH}.zip" \
+  -o "${TMP_DIR}/rustdesk-server.zip"
+unzip -o "${TMP_DIR}/rustdesk-server.zip" -d "${TMP_DIR}"
+
+# 停止服务（按实际托管方式二选一）
+sudo systemctl stop rustdesk-hbbs rustdesk-hbbr
+# 若使用 pm2：pm2 stop hbbs hbbr
+
+# 仅替换二进制文件（保留工作目录中的 id_ed25519* 与 db_v2.sqlite3）
+sudo install -m 755 "$(find "${TMP_DIR}" -type f -name hbbs | head -n1)" /usr/local/bin/hbbs
+sudo install -m 755 "$(find "${TMP_DIR}" -type f -name hbbr | head -n1)" /usr/local/bin/hbbr
+rm -rf "${TMP_DIR}"
+
+# 重启服务并检查状态
+sudo systemctl start rustdesk-hbbs rustdesk-hbbr
+# 若使用 pm2：pm2 restart hbbs hbbr
+sudo systemctl status rustdesk-hbbs rustdesk-hbbr --no-pager
+```
+
+> Debian / Ubuntu 若当初通过官方 `.deb` 包安装，可从 Releases 页面下载新版 `rustdesk-server-hbbs_*.deb` 和 `rustdesk-server-hbbr_*.deb`，执行 `sudo dpkg -i rustdesk-server-hbbs_*.deb rustdesk-server-hbbr_*.deb` 完成就地升级。
+
+#### 3. 更新托管的官方 Web 客户端（可选）
+
+```bash
+./scripts/sync-webclient.sh --build-official master
+```
+
+### 五、更新前备份、更新后验证与彻底重装
+
+```bash
+# 1. 更新前建议备份配置与持久化数据（含公钥与数据库）
+tar -czf "rustdesk-backup-$(date +%F).tar.gz" .env data
+
+# 2. 更新后验证 API 健康状态、容器状态与公钥一致性
+curl -fsS http://127.0.0.1:21114/health
+docker compose ps
+docker logs --tail 50 rustdesk-api
+cat ./data/server/id_ed25519.pub
+```
+
+> 若需要**清空所有数据并彻底重装**（会重新生成 `id_ed25519` 公钥并清空用户/设备记录，所有客户端需重新导入新 Key），执行 `docker compose down && rm -rf ./data` 后再启动即可。
 
 ---
 
@@ -330,6 +470,28 @@ DB_DSN=host=postgres user=rustdesk password=password dbname=rustdesk port=5432 s
 ---
 
 ## 常见问题与测试
+
+### 能登录/后台看到设备，但连接报错「无法通过注册服务器建立连接」
+
+登录和设备列表上报仅使用 `21114/TCP`（`rustdesk-api`），而真正建立远程连接需要通过官方 `hbbs` / `hbbr`。请按顺序排查：
+
+1. **检查云安全组与宿主机防火墙**：必须同时放行 **`21115/TCP`、`21116/TCP`、`21116/UDP`、`21117/TCP`**（最常见原因是只开了 `21114` 或漏开 `21116/UDP` / `21116/TCP`）。可在本地电脑测试端口连通性：
+   ```powershell
+   # Windows PowerShell
+   Test-NetConnection <你的服务器IP> -Port 21115
+   Test-NetConnection <你的服务器IP> -Port 21116
+   Test-NetConnection <你的服务器IP> -Port 21117
+   ```
+2. **确认主控端与被控端都已配置并显示绿色「就绪」**：两端均需填写同一套 ID 服务器（填纯 IP 或 `IP:21116`，不要带 `http://`）、中继服务器与 `Key`（与后台「概览」的 `id_ed25519.pub` 一致；重装清空过 `./data/server` 后需两端同步更新 Key）。
+3. **核查 `hbbs` / `hbbr` 状态与 `-r` 中继参数**：
+   ```bash
+   docker compose ps
+   docker inspect --format '{{.Config.Cmd}}' rustdesk-hbbs
+   docker logs --tail 50 rustdesk-hbbs
+   docker logs --tail 50 rustdesk-hbbr
+   ```
+   确保两个容器均为 `Up`，且 `hbbs` 的 `-r` 参数为你的公网 IP/域名（如 `x.x.x.x:21117`），而非 `localhost:21117`。
+4. **Docker 桥接源 IP 改写排查**：若上述端口全部畅通、两边均显示「就绪」但日志中客户端 IP 全是 `172.x.0.1`，可将 `docker-compose.yml` 中的 `hbbs`/`hbbr` 改为 `network_mode: host`（并移除 `ports:` 和 `networks:`）以规避 Docker NAT 干扰。
 
 ### 关于官方 OSS `hbbs` 与 Fork 版 `hbbs` 的说明
 
