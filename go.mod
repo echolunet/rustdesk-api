@@ -14,3 +14,8 @@ require (
 	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.25.12
 )
+
+require (
+	github.com/kr/text v0.2.0 // indirect
+	github.com/rogpeppe/go-internal v1.14.1 // indirect
+)
