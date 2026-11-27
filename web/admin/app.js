@@ -17,6 +17,7 @@
     auditKeyword: '',
     selectedABGuid: '',
     abPeerKeyword: '',
+    dashActivityTab: 'conn',
     pendingLogin: null, // { username, password, mode: 'tfa_check'|'email_check', useRecovery: false }
     resendTimer: null,
   };
@@ -498,10 +499,6 @@
   });
 
   $('btn-logout').addEventListener('click', logout);
-  $('btn-go-security').addEventListener('click', () => {
-    closeSidebar();
-    switchTab('security');
-  });
   $('modal-close').addEventListener('click', closeModal);
   $('modal-backdrop').addEventListener('click', (e) => {
     if (e.target === $('modal-backdrop')) closeModal();
@@ -548,15 +545,15 @@
   });
 
   const tabMeta = {
-    dashboard: { title: '概览仪表盘', subtitle: '实时运行状态、手机扫码配置与最近活动' },
-    devices: { title: '设备与权限组', subtitle: '查看受管客户端在线状态、硬件信息与设备组访问授权' },
-    ab: { title: '地址簿与标签', subtitle: '管理个人与共享地址簿、标签颜色及成员共享规则' },
-    users: { title: '用户与分组', subtitle: '管理本地与 SSO/LDAP 用户、分组权限与二次验证状态' },
-    security: { title: '安全与验证 (2FA)', subtitle: '管理 TOTP 两步验证、SMTP 邮件服务器与登录验证策略' },
-    sso: { title: '第三方登录 (SSO / LDAP)', subtitle: '配置 OIDC、GitHub、Google 单点登录与 LDAP/AD 目录集成' },
-    strategy: { title: '客户端默认策略', subtitle: '统一预设远程桌面默认帧率 (FPS)、画质、编解码器与安全权限，通过心跳动态下发' },
-    audit: { title: '审计与登录日志', subtitle: '追溯远程会话连接、文件传输、告警事件与登录历史' },
-    system: { title: '配置与官方更新', subtitle: '获取二维码/一键导入配置串并检查官方 RustDesk 最新版本' },
+    dashboard: { title: '概览', subtitle: '运行状态与快速连接配置' },
+    devices: { title: '设备', subtitle: '受管客户端状态与设备权限组' },
+    ab: { title: '地址簿', subtitle: '个人/共享地址簿、联系人与标签' },
+    users: { title: '用户', subtitle: '本地与 SSO/LDAP 账号及分组权限' },
+    security: { title: '安全与 2FA', subtitle: '两步验证器与邮箱登录策略' },
+    sso: { title: '单点登录', subtitle: 'OIDC / GitHub / Google 与 LDAP 目录' },
+    strategy: { title: '客户端策略', subtitle: '集中预设默认帧率、画质与功能开关（心跳下发）' },
+    audit: { title: '审计日志', subtitle: '远程会话、文件传输与登录记录' },
+    system: { title: '系统更新', subtitle: '客户端配置导出与官方版本检查' },
   };
 
   function switchTab(tab) {
@@ -584,10 +581,10 @@
 
   // ---------------- 1. Dashboard ----------------
   async function renderDashboard() {
-    $('topbar-actions').innerHTML = `<button class="btn btn-secondary btn-sm" id="btn-refresh-dash">刷新数据</button>`;
+    $('topbar-actions').innerHTML = `<button class="btn btn-secondary btn-sm" id="btn-refresh-dash">刷新</button>`;
     $('btn-refresh-dash').onclick = renderDashboard;
     const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+    area.innerHTML = renderSkeleton(4);
 
     try {
       const res = await api('/admin/api/dashboard');
@@ -596,13 +593,60 @@
       const totalPeers = Number(s.peers || 0);
       const onlinePeers = Number(s.online_peers || 0);
       const onlineRate = totalPeers > 0 ? Math.round((onlinePeers / totalPeers) * 100) : 0;
+      const recentConns = res.recent_conns || [];
+      const recentLogins = res.recent_logins || [];
+
+      const renderActivityTable = () => {
+        if (state.dashActivityTab === 'login') {
+          if (!recentLogins.length) return renderEmpty('暂无登录记录', '客户端或后台登录后显示');
+          return `
+            <table>
+              <thead><tr><th>用户</th><th>方式</th><th>状态</th><th>IP</th><th>时间</th></tr></thead>
+              <tbody>
+                ${recentLogins.map((r) => `
+                  <tr>
+                    <td><strong>${esc(r.username)}</strong></td>
+                    <td><span class="badge badge-gray">${esc(r.auth_source)}</span></td>
+                    <td><span class="badge ${r.status === 'success' ? 'badge-green' : 'badge-red'}">${esc(r.status)}</span></td>
+                    <td>${esc(r.ip)}</td>
+                    <td title="${esc(fmtTime(r.created_at))}">${esc(relTime(r.created_at))}</td>
+                  </tr>`).join('')}
+              </tbody>
+            </table>`;
+        }
+        if (!recentConns.length) return renderEmpty('暂无连接记录', '客户端发起远程会话后显示');
+        return `
+          <table>
+            <thead><tr><th>动作</th><th>被控 ID</th><th>来源</th><th>IP</th><th>时间</th></tr></thead>
+            <tbody>
+              ${recentConns.map((r) => `
+                <tr>
+                  <td><span class="badge badge-blue">${esc(r.action || '-')}</span></td>
+                  <td><button class="copy-pill" data-copy-val="${esc(r.peer_id)}">${esc(r.peer_id)}</button></td>
+                  <td>${esc(r.from_peer)} ${r.from_name ? `<span class="cell-sub">(${esc(r.from_name)})</span>` : ''}</td>
+                  <td>${esc(r.ip)}</td>
+                  <td title="${esc(fmtTime(r.created_at))}">${esc(relTime(r.created_at))}</td>
+                </tr>`).join('')}
+            </tbody>
+          </table>`;
+      };
 
       area.innerHTML = `
         <div class="stats-grid">
           <div class="stat-card">
             <div class="stat-head">
+              <span class="stat-label">在线设备</span>
+              <span class="stat-icon green"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg></span>
+            </div>
+            <div class="stat-value">${esc(onlinePeers)} <span style="font-size:14px;color:var(--muted);font-weight:500;">/ ${esc(totalPeers)}</span></div>
+            <div class="progress-track"><div class="progress-fill" style="width:${onlineRate}%"></div></div>
+            <div class="stat-foot">在线率 ${onlineRate}%</div>
+          </div>
+
+          <div class="stat-card">
+            <div class="stat-head">
               <span class="stat-label">系统用户</span>
-              <span class="stat-icon blue"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
+              <span class="stat-icon blue"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/></svg></span>
             </div>
             <div class="stat-value">${esc(s.users)}</div>
             <div class="stat-foot">含本地、LDAP 与 SSO 账号</div>
@@ -610,124 +654,80 @@
 
           <div class="stat-card">
             <div class="stat-head">
-              <span class="stat-label">在线 / 受管设备</span>
-              <span class="stat-icon green"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg></span>
-            </div>
-            <div class="stat-value">${esc(onlinePeers)} <span style="font-size:15px;color:var(--muted);font-weight:500;">/ ${esc(totalPeers)}</span></div>
-            <div class="progress-track"><div class="progress-fill" style="width:${onlineRate}%"></div></div>
-            <div class="stat-foot">当前在线率 ${onlineRate}%</div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-head">
-              <span class="stat-label">地址簿集合</span>
-              <span class="stat-icon blue"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>
+              <span class="stat-label">地址簿</span>
+              <span class="stat-icon blue"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg></span>
             </div>
             <div class="stat-value">${esc(s.address_books)}</div>
-            <div class="stat-foot">个人 + 团队共享地址簿</div>
+            <div class="stat-foot">个人与团队共享集合</div>
           </div>
 
           <div class="stat-card">
             <div class="stat-head">
-              <span class="stat-label">24h 连接审计</span>
-              <span class="stat-icon amber"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
+              <span class="stat-label">24h 活动</span>
+              <span class="stat-icon amber"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg></span>
             </div>
-            <div class="stat-value">${esc(s.conns_24h)}</div>
-            <div class="stat-foot">近 24 小时会话事件</div>
-          </div>
-
-          <div class="stat-card">
-            <div class="stat-head">
-              <span class="stat-label">24h 登录次数</span>
-              <span class="stat-icon green"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/></svg></span>
-            </div>
-            <div class="stat-value">${esc(s.logins_24h)}</div>
-            <div class="stat-foot">客户端与管理台认证统计</div>
+            <div class="stat-value">${esc(s.conns_24h)} <span style="font-size:14px;color:var(--muted);font-weight:500;">会话</span></div>
+            <div class="stat-foot">近 24 小时登录 ${esc(s.logins_24h)} 次</div>
           </div>
         </div>
 
         <div class="card">
           <div class="card-header">
             <div>
-              <h3 class="card-title">官方服务端连接参数 & 移动端扫码配置</h3>
-              <div class="cell-sub">公钥来源: ${esc(cfg.key_source)} · API 版本 v${esc(cfg.app_version || '1.0.0')}</div>
+              <h3 class="card-title">服务连接与客户端导入</h3>
+              <div class="cell-sub">公钥来源: ${esc(cfg.key_source)} · v${esc(cfg.app_version || '1.0.0')}</div>
             </div>
             <div class="row">
-              <span class="badge ${cfg.key_exists ? 'badge-green' : 'badge-red'}">${cfg.key_exists ? '已读取官方公钥' : '未找到公钥'}</span>
-              <button class="btn btn-primary btn-sm" id="copy-cfg-str">复制一键配置串</button>
-              <button class="btn btn-secondary btn-sm" id="copy-cli-cmd">复制 CLI 命令</button>
+              <span class="badge ${cfg.key_exists ? 'badge-green' : 'badge-red'}">${cfg.key_exists ? '公钥已就绪' : '未读取到公钥'}</span>
+              <button class="btn btn-primary btn-sm" id="copy-cfg-str">复制配置串</button>
+              <button class="btn btn-secondary btn-sm" id="copy-cli-cmd">复制 CLI</button>
             </div>
           </div>
-          <div class="grid-2" style="align-items:center;">
-            <div class="stack">
-              <div class="kv-grid">
-                <div class="kv-item"><span class="kv-key">ID 服务器</span><span class="kv-val">${esc(cfg.id_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.id_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">中继服务器</span><span class="kv-val">${esc(cfg.relay_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.relay_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">API 服务器</span><span class="kv-val">${esc(cfg.api_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.api_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">Official Key</span><span class="kv-val">${esc(cfg.public_key || '等待官方 hbbs 生成 id_ed25519.pub')}</span><button class="btn btn-xs btn-secondary" id="copy-pub-key">复制</button></div>
-              </div>
-              <div class="code-box" title="桌面/移动端导入配置串">${esc(cfg.config_string || '-')}</div>
+          <div class="grid-2" style="align-items:center;margin-bottom:0;">
+            <div class="kv-grid">
+              <div class="kv-item"><span class="kv-key">ID 服务器</span><span class="kv-val">${esc(cfg.id_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.id_server)}">复制</button></div>
+              <div class="kv-item"><span class="kv-key">Relay</span><span class="kv-val">${esc(cfg.relay_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.relay_server)}">复制</button></div>
+              <div class="kv-item"><span class="kv-key">API 地址</span><span class="kv-val">${esc(cfg.api_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.api_server)}">复制</button></div>
+              <div class="kv-item"><span class="kv-key">Key 公钥</span><span class="kv-val">${esc(cfg.public_key || '等待 hbbs 生成')}</span><button class="btn btn-xs btn-secondary" id="copy-pub-key">复制</button></div>
             </div>
 
             <div class="qr-panel">
               ${cfg.qr_data_uri ? `<div class="qr-frame"><img src="${esc(cfg.qr_data_uri)}" alt="RustDesk 配置二维码"></div>` : ''}
-              <div>
-                <strong style="font-size:13.5px;">RustDesk 手机端扫码一键导入</strong>
-                <div class="cell-sub">打开 RustDesk 手机客户端「网络设置」→ 点击右上角扫码即可自动填入全部参数</div>
-              </div>
+              <div class="cell-sub">手机端打开「网络设置」扫码即可一键导入</div>
             </div>
           </div>
         </div>
 
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header"><h3 class="card-title">最近连接审计</h3></div>
-            <div class="table-wrap">
-              ${(res.recent_conns || []).length ? `
-                <table>
-                  <thead><tr><th>动作</th><th>被控 ID</th><th>来源</th><th>IP</th><th>时间</th></tr></thead>
-                  <tbody>
-                    ${res.recent_conns.map((r) => `
-                      <tr>
-                        <td><span class="badge badge-blue">${esc(r.action || '-')}</span></td>
-                        <td><button class="copy-pill" data-copy-val="${esc(r.peer_id)}">${esc(r.peer_id)}</button></td>
-                        <td>${esc(r.from_peer)} ${r.from_name ? `<span class="cell-sub">(${esc(r.from_name)})</span>` : ''}</td>
-                        <td>${esc(r.ip)}</td>
-                        <td title="${esc(fmtTime(r.created_at))}">${esc(relTime(r.created_at))}</td>
-                      </tr>`).join('')}
-                  </tbody>
-                </table>` : renderEmpty('暂无连接记录', '客户端发起远程连接后会自动记录到此')}
+        <div class="card">
+          <div class="card-header">
+            <h3 class="card-title">最近活动</h3>
+            <div class="pill-group">
+              <button type="button" class="pill-btn ${state.dashActivityTab === 'conn' ? 'active' : ''}" data-dash-act="conn">最近连接</button>
+              <button type="button" class="pill-btn ${state.dashActivityTab === 'login' ? 'active' : ''}" data-dash-act="login">最近登录</button>
             </div>
           </div>
-
-          <div class="card">
-            <div class="card-header"><h3 class="card-title">最近登录日志</h3></div>
-            <div class="table-wrap">
-              ${(res.recent_logins || []).length ? `
-                <table>
-                  <thead><tr><th>用户</th><th>认证方式</th><th>状态</th><th>IP</th><th>时间</th></tr></thead>
-                  <tbody>
-                    ${res.recent_logins.map((r) => `
-                      <tr>
-                        <td><strong>${esc(r.username)}</strong></td>
-                        <td><span class="badge badge-gray">${esc(r.auth_source)}</span></td>
-                        <td><span class="badge ${r.status === 'success' ? 'badge-green' : 'badge-red'}">${esc(r.status)}</span></td>
-                        <td>${esc(r.ip)}</td>
-                        <td title="${esc(fmtTime(r.created_at))}">${esc(relTime(r.created_at))}</td>
-                      </tr>`).join('')}
-                  </tbody>
-                </table>` : renderEmpty('暂无登录记录', '用户登录客户端或管理后台后显示')}
-            </div>
-          </div>
+          <div class="table-wrap" id="dash-activity-wrap">${renderActivityTable()}</div>
         </div>
       `;
+
+      const bindDashCopy = () => {
+        area.querySelectorAll('[data-copy-val]').forEach((btn) => {
+          btn.onclick = () => copyText(btn.dataset.copyVal);
+        });
+      };
 
       $('copy-cfg-str').onclick = () => copyText(cfg.config_string, '已复制一键导入配置串');
       $('copy-cli-cmd').onclick = () => copyText(cfg.cli_command, '已复制 CLI 部署命令');
       $('copy-pub-key').onclick = () => copyText(cfg.public_key, '已复制官方 Public Key');
-      area.querySelectorAll('[data-copy-val]').forEach((btn) => {
-        btn.onclick = () => copyText(btn.dataset.copyVal);
+      area.querySelectorAll('[data-dash-act]').forEach((btn) => {
+        btn.onclick = () => {
+          state.dashActivityTab = btn.dataset.dashAct;
+          area.querySelectorAll('[data-dash-act]').forEach((b) => b.classList.toggle('active', b === btn));
+          $('dash-activity-wrap').innerHTML = renderActivityTable();
+          bindDashCopy();
+        };
       });
+      bindDashCopy();
     } catch (err) {
       area.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
     }
@@ -2483,19 +2483,19 @@
   // ---------------- 8b. Client Default Strategy ----------------
   async function renderStrategy() {
     $('topbar-actions').innerHTML = `
-      <button class="btn btn-secondary btn-sm" id="btn-refresh-strategy">刷新策略</button>
-      <button class="btn btn-primary btn-sm" id="btn-save-strategy">保存并下发</button>
+      <button class="btn btn-secondary btn-sm" id="btn-refresh-strategy">刷新</button>
+      <button class="btn btn-primary btn-sm" id="btn-save-strategy">保存策略</button>
     `;
     $('btn-refresh-strategy').onclick = renderStrategy;
 
     const area = $('content-area');
-    area.innerHTML = renderSkeleton(6);
+    area.innerHTML = renderSkeleton(5);
 
     const presets = [
-      { id: 'smooth60', title: '高帧流畅 (60 FPS)', meta: '自定义 · 60 FPS · 画质 75%', quality: 'custom', fps: 60, imgQ: 75 },
-      { id: 'ultra120', title: '电竞高刷 (120 FPS)', meta: '自定义 · 120 FPS · 画质 85%', quality: 'custom', fps: 120, imgQ: 85 },
-      { id: 'balanced30', title: '省流均衡 (30 FPS)', meta: '自定义 · 30 FPS · 画质 60%', quality: 'custom', fps: 30, imgQ: 60 },
-      { id: 'low15', title: '极低带宽 (15 FPS)', meta: '自定义 · 15 FPS · 画质 45%', quality: 'custom', fps: 15, imgQ: 45 },
+      { id: 'smooth60', title: '60 FPS 流畅', meta: '自定义 · 画质 75%', quality: 'custom', fps: 60, imgQ: 75 },
+      { id: 'ultra120', title: '120 FPS 高刷', meta: '自定义 · 画质 85%', quality: 'custom', fps: 120, imgQ: 85 },
+      { id: 'balanced30', title: '30 FPS 均衡', meta: '自定义 · 画质 60%', quality: 'custom', fps: 30, imgQ: 60 },
+      { id: 'low15', title: '15 FPS 省流', meta: '自定义 · 画质 45%', quality: 'custom', fps: 15, imgQ: 45 },
     ];
 
     try {
@@ -2508,29 +2508,22 @@
       area.innerHTML = `
         <div class="strategy-hero">
           <div>
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
-              <strong style="font-size:15px;">集中策略下发</strong>
-              <span class="badge ${s.enabled ? 'badge-green' : 'badge-gray'}" id="strat-status-badge">${s.enabled ? '已启用下发' : '已暂停下发'}</span>
-              <span class="badge badge-blue" id="strat-version-badge">版本 ${esc(String(s.strategy_modified_at || 0))}</span>
+            <div class="row" style="margin-bottom:3px;">
+              <strong style="font-size:14.5px;">心跳策略下发</strong>
+              <span class="badge ${s.enabled ? 'badge-green' : 'badge-gray'}" id="strat-status-badge">${s.enabled ? '已启用' : '已暂停'}</span>
+              <span class="badge badge-blue" id="strat-version-badge">v${esc(String(s.strategy_modified_at || 0))}</span>
             </div>
-            <div class="cell-sub">最近策略更新时间：<span id="strat-mod-time">${esc(modText)}</span>（官方客户端通过 <code>/api/heartbeat</code> 自动拉取）</div>
+            <div class="cell-sub">最近更新: <span id="strat-mod-time">${esc(modText)}</span> · 需将画质设为 <code>custom</code> 且客户端接入策略同步通道才会自动拉取</div>
           </div>
-          <label class="checkbox-row" style="margin:0;background:var(--surface);padding:9px 14px;border-radius:10px;border:1px solid var(--border);">
-            <input type="checkbox" class="switch-check" id="strat-enabled" ${s.enabled ? 'checked' : ''} />
-            <span style="font-weight:600;">启用策略下发</span>
+          <label class="checkbox-row" style="margin:0;">
+            <span style="font-weight:500;">启用下发</span>
+            <input type="checkbox" class="toggle-switch" id="strat-enabled" ${s.enabled ? 'checked' : ''} />
           </label>
         </div>
 
-        <div class="info-banner" style="margin-bottom:16px;">
-          提示：<strong>custom-fps</strong> 在画面质量设为 <code>custom</code>（自定义）时生效；修改保存后会递增策略版本号，在线设备将在下一次心跳（通常 15 秒内）自动同步默认配置。
-        </div>
-
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-header">
-            <div>
-              <h3 class="card-title">一键场景预设</h3>
-              <div class="cell-sub">点击预设可快速填充帧率与画质参数，再微调或保存下发</div>
-            </div>
+        <div class="card">
+          <div class="card-header" style="margin-bottom:10px;">
+            <h3 class="card-title">快捷预设</h3>
           </div>
           <div class="strategy-presets" id="strat-preset-list">
             ${presets.map((p) => `
@@ -2542,19 +2535,14 @@
           </div>
         </div>
 
-        <div class="grid-2" style="margin-bottom:16px;">
+        <div class="grid-2">
           <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="card-title">画质、帧率与编解码</h3>
-                <div class="cell-sub">控制默认传输帧率 (5–120 FPS)、压缩画质与首选编码器</div>
-              </div>
-            </div>
+            <div class="card-header"><h3 class="card-title">画面与连接策略</h3></div>
             <div class="stack">
               <div class="field">
-                <label for="strat-image-quality">默认画质模式 (image-quality)</label>
+                <label for="strat-image-quality">画质模式 (image-quality)</label>
                 <select id="strat-image-quality" class="select-input">
-                  <option value="custom" ${s.image_quality === 'custom' ? 'selected' : ''}>custom — 自定义帧率与画质（使 FPS 生效）</option>
+                  <option value="custom" ${s.image_quality === 'custom' ? 'selected' : ''}>custom — 自定义帧率与画质</option>
                   <option value="balanced" ${s.image_quality === 'balanced' ? 'selected' : ''}>balanced — 平衡模式</option>
                   <option value="best" ${s.image_quality === 'best' ? 'selected' : ''}>best — 最佳画质</option>
                   <option value="low" ${s.image_quality === 'low' ? 'selected' : ''}>low — 低带宽流畅</option>
@@ -2562,7 +2550,7 @@
               </div>
 
               <div class="field">
-                <label for="strat-fps">默认帧率上限 custom-fps (5–120 FPS)</label>
+                <label for="strat-fps">默认帧率上限 (5–120 FPS)</label>
                 <div class="range-row">
                   <input type="range" id="strat-fps" class="range-input" min="5" max="120" step="1" value="${Number(s.custom_fps || 60)}" />
                   <input type="number" id="strat-fps-num" class="range-num" min="5" max="120" value="${Number(s.custom_fps || 60)}" />
@@ -2570,7 +2558,7 @@
               </div>
 
               <div class="field">
-                <label for="strat-quality">自定义图像质量 custom-image-quality (10–100%)</label>
+                <label for="strat-quality">自定义图像质量 (10–100%)</label>
                 <div class="range-row">
                   <input type="range" id="strat-quality" class="range-input" min="10" max="100" step="1" value="${Number(s.custom_image_quality || 75)}" />
                   <input type="number" id="strat-quality-num" class="range-num" min="10" max="100" value="${Number(s.custom_image_quality || 75)}" />
@@ -2578,134 +2566,107 @@
               </div>
 
               <div class="field">
-                <label for="strat-codec">首选视频编解码器 (codec-preference)</label>
+                <label for="strat-codec">首选编解码器</label>
                 <select id="strat-codec" class="select-input">
-                  <option value="auto" ${(s.codec_preference || 'auto') === 'auto' ? 'selected' : ''}>auto — 客户端自动协商（推荐）</option>
-                  <option value="vp9" ${s.codec_preference === 'vp9' ? 'selected' : ''}>vp9 — 均衡通用</option>
-                  <option value="vp8" ${s.codec_preference === 'vp8' ? 'selected' : ''}>vp8 — 低开销兼容</option>
-                  <option value="h264" ${s.codec_preference === 'h264' ? 'selected' : ''}>h264 — 硬解兼容最佳</option>
-                  <option value="h265" ${s.codec_preference === 'h265' ? 'selected' : ''}>h265 — 高压缩高清晰</option>
-                  <option value="av1" ${s.codec_preference === 'av1' ? 'selected' : ''}>av1 — 新一代高压缩比</option>
+                  <option value="auto" ${(s.codec_preference || 'auto') === 'auto' ? 'selected' : ''}>auto — 自动协商</option>
+                  <option value="vp9" ${s.codec_preference === 'vp9' ? 'selected' : ''}>vp9</option>
+                  <option value="vp8" ${s.codec_preference === 'vp8' ? 'selected' : ''}>vp8</option>
+                  <option value="h264" ${s.codec_preference === 'h264' ? 'selected' : ''}>h264</option>
+                  <option value="h265" ${s.codec_preference === 'h265' ? 'selected' : ''}>h265</option>
+                  <option value="av1" ${s.codec_preference === 'av1' ? 'selected' : ''}>av1</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="strat-verification">密码验证策略</label>
+                <select id="strat-verification" class="select-input">
+                  <option value="" ${!s.verification_method ? 'selected' : ''}>不覆盖本地设置</option>
+                  <option value="use-both-passwords" ${s.verification_method === 'use-both-passwords' ? 'selected' : ''}>临时与固定密码均可</option>
+                  <option value="use-temporary-password" ${s.verification_method === 'use-temporary-password' ? 'selected' : ''}>仅临时密码</option>
+                  <option value="use-permanent-password" ${s.verification_method === 'use-permanent-password' ? 'selected' : ''}>仅固定密码</option>
+                </select>
+              </div>
+
+              <div class="field">
+                <label for="strat-approve">被控确认模式</label>
+                <select id="strat-approve" class="select-input">
+                  <option value="" ${!s.approve_mode ? 'selected' : ''}>不覆盖本地设置</option>
+                  <option value="both" ${s.approve_mode === 'both' ? 'selected' : ''}>点击弹窗或密码验证</option>
+                  <option value="password" ${s.approve_mode === 'password' ? 'selected' : ''}>仅密码验证（无人值守）</option>
+                  <option value="click" ${s.approve_mode === 'click' ? 'selected' : ''}>仅桌面弹窗确认</option>
                 </select>
               </div>
             </div>
           </div>
 
           <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="card-title">安全验证与连接策略</h3>
-                <div class="cell-sub">控制密码验证方式、被控确认模式及网络直连行为</div>
+            <div class="card-header"><h3 class="card-title">会话能力开关</h3></div>
+            <div class="toggle-list">
+              <label class="toggle-row" title="enable-hwcodec">
+                <div><div class="toggle-label">硬件编解码</div><div class="toggle-sub">优先启用 GPU 硬解加速</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-hwcodec" ${s.enable_hwcodec ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="direct-server">
+                <div><div class="toggle-label">允许直连服务</div><div class="toggle-sub">优先尝试 Direct IP 直连</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-direct" ${s.direct_server ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-audio">
+                <div><div class="toggle-label">远程音频传输</div><div class="toggle-sub">同步远端桌面声音</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-audio" ${s.enable_audio ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-clipboard">
+                <div><div class="toggle-label">剪贴板同步</div><div class="toggle-sub">文本/内容双向复制粘贴</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-clipboard" ${s.enable_clipboard ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-file-transfer">
+                <div><div class="toggle-label">文件传输</div><div class="toggle-sub">允许会话内传输文件</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-file" ${s.enable_file_transfer ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-keyboard">
+                <div><div class="toggle-label">键盘鼠标控制</div><div class="toggle-sub">禁用则仅观察屏幕</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-keyboard" ${s.enable_keyboard ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-tunnel">
+                <div><div class="toggle-label">TCP 端口隧道</div><div class="toggle-sub">允许端口转发映射</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-tunnel" ${s.enable_tunnel ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-remote-restart">
+                <div><div class="toggle-label">允许远程重启</div><div class="toggle-sub">支持主控端重启被控电脑</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-restart" ${s.enable_remote_restart ? 'checked' : ''} />
+              </label>
+              <label class="toggle-row" title="enable-record-session">
+                <div><div class="toggle-label">允许会话录制</div><div class="toggle-sub">允许桌面录屏留存</div></div>
+                <input type="checkbox" class="toggle-switch" id="strat-record" ${s.enable_record_session ? 'checked' : ''} />
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <details class="collapsible-card">
+          <summary class="collapsible-summary">
+            <span>高级扩展参数与心跳 JSON 预览</span>
+            <span class="cell-sub" style="margin:0;">点击展开 / 收起 ▾</span>
+          </summary>
+          <div class="grid-2" style="margin-bottom:0;">
+            <div class="stack">
+              <div class="field">
+                <label for="strat-extra">扩展键值 (extra_options JSON)</label>
+                <textarea id="strat-extra" rows="6" style="font-family:monospace;font-size:12px;" placeholder='{"allow-remove-wallpaper": "Y"}'>${esc(s.extra_options || '')}</textarea>
+              </div>
+              <div id="strat-extra-err" class="error-banner hidden"></div>
+              <div class="row" style="justify-content:flex-end;">
+                <button class="btn btn-primary btn-sm" id="btn-save-strategy-bottom">保存策略</button>
               </div>
             </div>
             <div class="stack">
-              <div class="field">
-                <label for="strat-verification">密码验证策略 (verification-method)</label>
-                <select id="strat-verification" class="select-input">
-                  <option value="" ${!s.verification_method ? 'selected' : ''}>不覆盖客户端本地设置</option>
-                  <option value="use-both-passwords" ${s.verification_method === 'use-both-passwords' ? 'selected' : ''}>use-both-passwords — 允许临时密码和固定密码</option>
-                  <option value="use-temporary-password" ${s.verification_method === 'use-temporary-password' ? 'selected' : ''}>use-temporary-password — 仅使用一次性临时密码</option>
-                  <option value="use-permanent-password" ${s.verification_method === 'use-permanent-password' ? 'selected' : ''}>use-permanent-password — 仅使用固定密码</option>
-                </select>
+              <div class="row" style="justify-content:space-between;">
+                <span style="font-size:12.5px;font-weight:500;color:var(--text-secondary);">心跳下发快照 (<code>config_options</code>)</span>
+                <button class="btn btn-secondary btn-xs" id="btn-copy-strategy-json">复制 JSON</button>
               </div>
-
-              <div class="field">
-                <label for="strat-approve">被控端确认模式 (approve-mode)</label>
-                <select id="strat-approve" class="select-input">
-                  <option value="" ${!s.approve_mode ? 'selected' : ''}>不覆盖客户端本地设置</option>
-                  <option value="both" ${s.approve_mode === 'both' ? 'selected' : ''}>both — 允许弹窗点击或密码验证</option>
-                  <option value="password" ${s.approve_mode === 'password' ? 'selected' : ''}>password — 仅密码验证（无人值守）</option>
-                  <option value="click" ${s.approve_mode === 'click' ? 'selected' : ''}>click — 仅桌面弹窗确认</option>
-                </select>
-              </div>
-
-              <div class="toggle-grid">
-                <label class="toggle-item">
-                  <div>
-                    <div class="toggle-label">硬件编解码</div>
-                    <div class="toggle-sub">enable-hwcodec</div>
-                  </div>
-                  <input type="checkbox" class="switch-check" id="strat-hwcodec" ${s.enable_hwcodec ? 'checked' : ''} />
-                </label>
-                <label class="toggle-item">
-                  <div>
-                    <div class="toggle-label">默认启用直连服务</div>
-                    <div class="toggle-sub">direct-server (Direct IP)</div>
-                  </div>
-                  <input type="checkbox" class="switch-check" id="strat-direct" ${s.direct_server ? 'checked' : ''} />
-                </label>
-              </div>
+              <pre class="code-box" id="strat-preview-json" style="margin:0;max-height:210px;overflow:auto;"></pre>
             </div>
           </div>
-        </div>
-
-        <div class="card" style="margin-bottom:16px;">
-          <div class="card-header">
-            <div>
-              <h3 class="card-title">会话能力权限开关</h3>
-              <div class="cell-sub">统一开启或禁用客户端会话内的音频、剪贴板、文件传输及隧道能力</div>
-            </div>
-          </div>
-          <div class="toggle-grid">
-            <label class="toggle-item">
-              <div><div class="toggle-label">远程音频传输</div><div class="toggle-sub">enable-audio</div></div>
-              <input type="checkbox" class="switch-check" id="strat-audio" ${s.enable_audio ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">剪贴板同步</div><div class="toggle-sub">enable-clipboard</div></div>
-              <input type="checkbox" class="switch-check" id="strat-clipboard" ${s.enable_clipboard ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">文件传输</div><div class="toggle-sub">enable-file-transfer</div></div>
-              <input type="checkbox" class="switch-check" id="strat-file" ${s.enable_file_transfer ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">键盘鼠标控制</div><div class="toggle-sub">enable-keyboard</div></div>
-              <input type="checkbox" class="switch-check" id="strat-keyboard" ${s.enable_keyboard ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">TCP / 端口转发隧道</div><div class="toggle-sub">enable-tunnel</div></div>
-              <input type="checkbox" class="switch-check" id="strat-tunnel" ${s.enable_tunnel ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">允许远程重启</div><div class="toggle-sub">enable-remote-restart</div></div>
-              <input type="checkbox" class="switch-check" id="strat-restart" ${s.enable_remote_restart ? 'checked' : ''} />
-            </label>
-            <label class="toggle-item">
-              <div><div class="toggle-label">允许会话录制</div><div class="toggle-sub">enable-record-session</div></div>
-              <input type="checkbox" class="switch-check" id="strat-record" ${s.enable_record_session ? 'checked' : ''} />
-            </label>
-          </div>
-        </div>
-
-        <div class="grid-2">
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="card-title">高级扩展键值 (extra_options)</h3>
-                <div class="cell-sub">可选 JSON 对象，用于追加官方其他 <code>config_options</code>（服务端地址与公钥键名受保护自动过滤）</div>
-              </div>
-            </div>
-            <div class="field">
-              <textarea id="strat-extra" rows="6" style="font-family:monospace;font-size:12.5px;" placeholder='{"allow-remove-wallpaper": "Y"}'>${esc(s.extra_options || '')}</textarea>
-            </div>
-            <div id="strat-extra-err" class="error-banner hidden" style="margin-top:8px;"></div>
-            <div class="row" style="margin-top:12px;justify-content:flex-end;">
-              <button class="btn btn-primary" id="btn-save-strategy-bottom">保存策略并下发客户端</button>
-            </div>
-          </div>
-
-          <div class="card">
-            <div class="card-header">
-              <div>
-                <h3 class="card-title">实时心跳策略预览 (config_options)</h3>
-                <div class="cell-sub"><code>POST /api/heartbeat</code> 实际下发给客户端的键值快照</div>
-              </div>
-              <button class="btn btn-secondary btn-sm" id="btn-copy-strategy-json">复制 JSON</button>
-            </div>
-            <pre class="code-box" id="strat-preview-json" style="margin:0;max-height:240px;overflow:auto;white-space:pre-wrap;"></pre>
-          </div>
-        </div>
+        </details>
       `;
 
       const clamp = (v, min, max, fb) => {
@@ -2738,7 +2699,7 @@
         const p = collectPayload();
         const badge = $('strat-status-badge');
         badge.className = `badge ${p.enabled ? 'badge-green' : 'badge-gray'}`;
-        badge.textContent = p.enabled ? '已启用下发' : '已暂停下发';
+        badge.textContent = p.enabled ? '已启用' : '已暂停';
 
         area.querySelectorAll('.preset-card').forEach((card) => {
           const item = presets.find((x) => x.id === card.dataset.presetId);
@@ -2844,7 +2805,7 @@
               throw new Error('extra_options 必须是 JSON 对象');
             }
           } catch (e) {
-            toast(`高级扩展参数格式无效: ${e.message}`, 'err');
+            toast(`高级扩展参数格式无效: ${e.message}`, false);
             return;
           }
         }
@@ -2857,14 +2818,14 @@
             body: JSON.stringify(payload),
           });
           const savedStrat = saved.strategy || {};
-          $('strat-version-badge').textContent = `版本 ${savedStrat.strategy_modified_at || 0}`;
+          $('strat-version-badge').textContent = `v${savedStrat.strategy_modified_at || 0}`;
           if (savedStrat.strategy_modified_at) {
             $('strat-mod-time').textContent = new Date(savedStrat.strategy_modified_at * 1000).toLocaleString('zh-CN', { hour12: false });
           }
           $('strat-preview-json').textContent = JSON.stringify({ config_options: saved.config_options || {} }, null, 2);
-          toast('客户端策略已保存，设备将在下次心跳同步', 'ok');
+          toast('策略已保存', true);
         } catch (err) {
-          toast(err.message, 'err');
+          toast(err.message, false);
         } finally {
           [topBtn, botBtn].forEach((b) => { if (b) b.disabled = false; });
         }
