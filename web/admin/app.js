@@ -18,6 +18,8 @@
     selectedABGuid: '',
     abPeerKeyword: '',
     dashActivityTab: 'conn',
+    securitySubTab: '2fa',
+    settingsSubTab: 'strategy',
     pendingLogin: null, // { username, password, mode: 'tfa_check'|'email_check', useRecovery: false }
     resendTimer: null,
   };
@@ -551,21 +553,30 @@
   const tabMeta = {
     dashboard: { title: '概览', subtitle: '运行状态与快速连接配置' },
     devices: { title: '设备', subtitle: '受管客户端状态与设备权限组' },
-    ab: { title: '地址簿', subtitle: '个人/共享地址簿、联系人与标签' },
-    users: { title: '用户', subtitle: '本地与 SSO/LDAP 账号及分组权限' },
-    security: { title: '安全与 2FA', subtitle: '两步验证器与邮箱登录策略' },
-    sso: { title: '单点登录', subtitle: 'OIDC / GitHub / Google 与 LDAP 目录' },
-    strategy: { title: '客户端策略', subtitle: '集中预设默认帧率、画质与功能开关（心跳下发）' },
-    audit: { title: '审计日志', subtitle: '远程会话、文件传输与登录记录' },
-    system: { title: '系统更新', subtitle: '客户端配置导出与官方版本检查' },
+    ab: { title: '地址簿', subtitle: '个人/共享地址簿与标签' },
+    users: { title: '用户', subtitle: '账号与用户分组管理' },
+    security: { title: '安全', subtitle: '两步验证、邮箱校验与单点登录' },
+    audit: { title: '日志', subtitle: '连接、登录、文件与告警审计' },
+    settings: { title: '设置', subtitle: '客户端默认策略与官方版本更新' },
   };
 
   function switchTab(tab) {
-    state.tab = tab;
+    let targetTab = tab;
+    if (tab === 'sso') {
+      targetTab = 'security';
+      state.securitySubTab = 'sso';
+    } else if (tab === 'strategy') {
+      targetTab = 'settings';
+      state.settingsSubTab = 'strategy';
+    } else if (tab === 'system') {
+      targetTab = 'settings';
+      state.settingsSubTab = 'updates';
+    }
+    state.tab = targetTab;
     document.querySelectorAll('.nav-item').forEach((b) => {
-      b.classList.toggle('active', b.dataset.tab === tab);
+      b.classList.toggle('active', b.dataset.tab === targetTab);
     });
-    const meta = tabMeta[tab] || { title: tab, subtitle: '' };
+    const meta = tabMeta[targetTab] || { title: targetTab, subtitle: '' };
     $('page-title').textContent = meta.title;
     $('page-subtitle').textContent = meta.subtitle;
     $('topbar-actions').innerHTML = '';
@@ -575,12 +586,10 @@
       ab: renderAddressBooks,
       users: renderUsers,
       security: renderSecurity,
-      sso: renderSSO,
-      strategy: renderStrategy,
       audit: renderAudit,
-      system: renderSystem,
+      settings: renderSettings,
     };
-    (renderers[tab] || renderDashboard)();
+    (renderers[targetTab] || renderDashboard)();
   }
 
   // ---------------- 1. Dashboard ----------------
@@ -683,6 +692,7 @@
             </div>
             <div class="row">
               <span class="badge ${cfg.key_exists ? 'badge-green' : 'badge-red'}">${cfg.key_exists ? '公钥已就绪' : '未读取到公钥'}</span>
+              ${cfg.webclient_ready ? `<a class="btn btn-secondary btn-sm" href="/webclient/" target="_blank" rel="noopener">Web 客户端 ↗</a>` : ''}
               <button class="btn btn-primary btn-sm" id="copy-cfg-str">复制配置串</button>
               <button class="btn btn-secondary btn-sm" id="copy-cli-cmd">复制 CLI</button>
             </div>
@@ -1038,13 +1048,38 @@
     );
   }
 
-  // ---------------- 3. Security & 2FA / Email Verification ----------------
+  // ---------------- 3. Security & 2FA / Email / SSO ----------------
   async function renderSecurity() {
-    $('topbar-actions').innerHTML = `<button class="btn btn-secondary btn-sm" id="btn-refresh-sec">刷新状态</button>`;
-    $('btn-refresh-sec').onclick = renderSecurity;
-    const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+    if (state.securitySubTab === 'sso') {
+      $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-add-oauth">+ 添加 SSO</button>`;
+    } else {
+      $('topbar-actions').innerHTML = `<button class="btn btn-secondary btn-sm" id="btn-refresh-sec">刷新</button>`;
+      $('btn-refresh-sec').onclick = renderSecurity;
+    }
 
+    const area = $('content-area');
+    const sub = state.securitySubTab || '2fa';
+    area.innerHTML = `
+      <div class="tabs">
+        <button class="tab-btn ${sub === '2fa' ? 'active' : ''}" data-sectab="2fa">2FA 与邮箱验证</button>
+        <button class="tab-btn ${sub === 'sso' ? 'active' : ''}" data-sectab="sso">第三方登录 (SSO / LDAP)</button>
+      </div>
+      <div id="sec-body">${renderSkeleton(4)}</div>
+    `;
+
+    area.querySelectorAll('[data-sectab]').forEach((btn) => {
+      btn.onclick = () => {
+        state.securitySubTab = btn.dataset.sectab;
+        renderSecurity();
+      };
+    });
+
+    if (sub === 'sso') {
+      await renderSSO($('sec-body'));
+      return;
+    }
+
+    const box = $('sec-body');
     try {
       const [tfaInfo, smtpCfg] = await Promise.all([
         api('/admin/api/me/2fa'),
@@ -1052,29 +1087,29 @@
       ]);
       const policy = smtpCfg.email_login_policy || 'off';
 
-      area.innerHTML = `
+      box.innerHTML = `
         <div class="card">
           <div class="card-header">
             <div>
-              <h3 class="card-title">我的两步验证 (TOTP Authenticator)</h3>
-              <div class="cell-sub">兼容 Google Authenticator、Microsoft Authenticator、1Password、Bitwarden 等验证器</div>
+              <h3 class="card-title">两步验证 (TOTP)</h3>
+              <div class="cell-sub">支持 Google / Microsoft Authenticator、1Password 等验证器</div>
             </div>
-            <span class="badge ${tfaInfo.totp_enabled ? 'badge-green' : 'badge-gray'}">${tfaInfo.totp_enabled ? '已开启保护' : '未开启'}</span>
+            <span class="badge ${tfaInfo.totp_enabled ? 'badge-green' : 'badge-gray'}">${tfaInfo.totp_enabled ? '已启用' : '未开启'}</span>
           </div>
 
           <div class="security-hero ${tfaInfo.totp_enabled ? 'active' : ''}">
-            <div class="stack" style="gap:4px;">
-              <strong style="font-size:15px;">${tfaInfo.totp_enabled ? '账号已启用 TOTP 动态口令保护' : '建议开启 TOTP 两步验证保护管理员与客户端登录'}</strong>
+            <div class="stack" style="gap:3px;">
+              <strong style="font-size:14px;">${tfaInfo.totp_enabled ? '已启用动态口令保护' : '建议开启两步验证保护管理员与客户端登录'}</strong>
               <span class="cell-sub">
                 ${tfaInfo.totp_enabled
-                  ? `登录管理后台和 RustDesk 客户端均需输入动态验证码 · 剩余可用备用恢复码：${esc(tfaInfo.recovery_codes_remaining)} 个`
-                  : '绑定验证器后将自动生成 6 个一次性备用恢复码，防止手机丢失导致无法登录'}
+                  ? `剩余可用备用恢复码：${esc(tfaInfo.recovery_codes_remaining)} 个`
+                  : '绑定后自动生成 6 个一次性备用恢复码'}
               </span>
             </div>
             <div class="row">
               ${tfaInfo.totp_enabled
-                ? `<button id="btn-disable-2fa" class="btn btn-danger">关闭两步验证</button>`
-                : `<button id="btn-enable-2fa" class="btn btn-primary">立即开启 2FA</button>`}
+                ? `<button id="btn-disable-2fa" class="btn btn-danger btn-sm">关闭 2FA</button>`
+                : `<button id="btn-enable-2fa" class="btn btn-primary btn-sm">立即开启 2FA</button>`}
             </div>
           </div>
         </div>
@@ -1082,86 +1117,89 @@
         <div class="card">
           <div class="card-header">
             <div>
-              <h3 class="card-title">SMTP 邮件服务 & 邮箱登录验证策略</h3>
-              <div class="cell-sub">用于发送登录一次性邮箱验证码（若用户同时开启 TOTP，优先使用 TOTP）</div>
+              <h3 class="card-title">SMTP 发信与邮箱登录验证</h3>
+              <div class="cell-sub">已开启 TOTP 的账号优先验证 TOTP</div>
             </div>
-            <span class="badge ${smtpCfg.enabled ? 'badge-green' : 'badge-gray'}">${smtpCfg.enabled ? 'SMTP 已启用' : 'SMTP 未启用'}</span>
+            <label class="checkbox-row" style="margin:0;">
+              <span style="font-weight:500;">启用 SMTP</span>
+              <input id="smtp-enabled-toggle" name="enabled" form="form-smtp" type="checkbox" class="toggle-switch" ${smtpCfg.enabled ? 'checked' : ''}>
+            </label>
           </div>
 
           <form id="form-smtp" class="stack">
-            <label class="checkbox-row"><input name="enabled" type="checkbox" ${smtpCfg.enabled ? 'checked' : ''}> 启用 SMTP 邮件发送服务</label>
-
             <div class="field">
-              <span>全局邮箱登录验证策略</span>
+              <span>全局邮箱验证策略</span>
               <div class="policy-grid" id="policy-cards">
                 <label class="policy-card ${policy === 'off' ? 'selected' : ''}">
                   <input type="radio" name="email_login_policy" value="off" ${policy === 'off' ? 'checked' : ''}>
-                  <strong>关闭全局强制</strong>
-                  <span>仅当单个用户开启「强制邮箱验证」时触发</span>
+                  <strong>关闭全局</strong>
+                  <span>仅对单独开启强制邮箱验证的用户生效</span>
                 </label>
                 <label class="policy-card ${policy === 'new_device' ? 'selected' : ''}">
                   <input type="radio" name="email_login_policy" value="new_device" ${policy === 'new_device' ? 'checked' : ''}>
-                  <strong>仅新设备首次登录验证 (推荐)</strong>
-                  <span>未知设备 UUID 需验证邮箱，通过后自动加入信任设备</span>
+                  <strong>新设备首次验证 (推荐)</strong>
+                  <span>未知设备需验证邮箱，通过后自动记为信任设备</span>
                 </label>
                 <label class="policy-card ${policy === 'always' ? 'selected' : ''}">
                   <input type="radio" name="email_login_policy" value="always" ${policy === 'always' ? 'checked' : ''}>
-                  <strong>每次登录均验证</strong>
-                  <span>所有有邮箱的用户每次密码登录都需要邮件验证码</span>
+                  <strong>每次登录验证</strong>
+                  <span>有绑定邮箱的账号每次登录均需邮箱验证码</span>
                 </label>
               </div>
             </div>
 
-            <div class="grid-2">
-              <label class="field"><span>SMTP 服务器地址</span><input name="host" type="text" placeholder="smtp.qq.com / smtp.gmail.com" value="${esc(smtpCfg.host || '')}"></label>
-              <div class="row">
-                <label class="field" style="flex:1;"><span>端口</span><input id="smtp-port-input" name="port" type="number" value="${esc(smtpCfg.port || 587)}"></label>
-                <label class="field" style="flex:1;"><span>加密方式</span>
-                  <select id="smtp-sec-select" name="security">
-                    <option value="starttls" ${smtpCfg.security === 'starttls' ? 'selected' : ''}>STARTTLS (587)</option>
-                    <option value="ssl" ${smtpCfg.security === 'ssl' ? 'selected' : ''}>SSL / TLS (465)</option>
-                    <option value="none" ${smtpCfg.security === 'none' ? 'selected' : ''}>无加密 (25)</option>
-                  </select>
-                </label>
+            <div id="smtp-fields-wrap" class="smtp-fields-wrap stack ${smtpCfg.enabled ? '' : 'hidden'}">
+              <div class="grid-2">
+                <label class="field"><span>SMTP 服务器</span><input name="host" type="text" placeholder="smtp.qq.com / smtp.gmail.com" value="${esc(smtpCfg.host || '')}"></label>
+                <div class="row">
+                  <label class="field" style="flex:1;"><span>端口</span><input id="smtp-port-input" name="port" type="number" value="${esc(smtpCfg.port || 587)}"></label>
+                  <label class="field" style="flex:1;"><span>加密方式</span>
+                    <select id="smtp-sec-select" name="security">
+                      <option value="starttls" ${smtpCfg.security === 'starttls' ? 'selected' : ''}>STARTTLS (587)</option>
+                      <option value="ssl" ${smtpCfg.security === 'ssl' ? 'selected' : ''}>SSL (465)</option>
+                      <option value="none" ${smtpCfg.security === 'none' ? 'selected' : ''}>无加密 (25)</option>
+                    </select>
+                  </label>
+                </div>
+                <label class="field"><span>SMTP 用户名</span><input name="username" type="text" placeholder="noreply@example.com" value="${esc(smtpCfg.username || '')}"></label>
+                <label class="field"><span>SMTP 密码 / 授权码 ${smtpCfg.has_password ? '(留空保持不变)' : ''}</span><input name="password" type="password" value=""></label>
+                <label class="field"><span>发件人邮箱</span><input name="from_address" type="email" placeholder="noreply@example.com" value="${esc(smtpCfg.from_address || '')}"></label>
+                <div class="row">
+                  <label class="field" style="flex:2;"><span>发件人名称</span><input name="from_name" type="text" value="${esc(smtpCfg.from_name || 'RustDesk API')}"></label>
+                  <label class="field" style="flex:1;"><span>有效期(分)</span><input name="code_expire_minutes" type="number" min="1" max="60" value="${esc(smtpCfg.code_expire_minutes || 10)}"></label>
+                </div>
               </div>
-              <label class="field"><span>SMTP 用户名</span><input name="username" type="text" placeholder="noreply@example.com" value="${esc(smtpCfg.username || '')}"></label>
-              <label class="field"><span>SMTP 密码 / 授权码 ${smtpCfg.has_password ? '(已配置，留空保持不变)' : ''}</span><input name="password" type="password" value=""></label>
-              <label class="field"><span>发件人邮箱</span><input name="from_address" type="email" placeholder="noreply@example.com" value="${esc(smtpCfg.from_address || '')}"></label>
-              <div class="row">
-                <label class="field" style="flex:2;"><span>发件人名称</span><input name="from_name" type="text" value="${esc(smtpCfg.from_name || 'RustDesk API')}"></label>
-                <label class="field" style="flex:1;"><span>验证码有效期(分)</span><input name="code_expire_minutes" type="number" min="1" max="60" value="${esc(smtpCfg.code_expire_minutes || 10)}"></label>
-              </div>
-            </div>
 
-            <label class="checkbox-row"><input name="skip_tls_verify" type="checkbox" ${smtpCfg.skip_tls_verify ? 'checked' : ''}> 跳过 SMTP TLS 证书校验（仅内网自建邮件服务器勾选）</label>
+              <label class="checkbox-row">
+                <input name="skip_tls_verify" type="checkbox" class="toggle-switch" ${smtpCfg.skip_tls_verify ? 'checked' : ''}>
+                <span>跳过 SMTP TLS 证书校验（仅自建内网邮局）</span>
+              </label>
+
+              <div class="row" style="padding-top:4px;">
+                <input id="smtp-test-to" class="search-input" type="email" style="flex:1;max-width:300px;" value="${esc(tfaInfo.email || '')}" placeholder="输入测试收件邮箱...">
+                <button id="btn-test-smtp" type="button" class="btn btn-secondary btn-sm">发送测试邮件</button>
+              </div>
+              <div id="smtp-test-result" class="hidden"></div>
+            </div>
 
             <div class="row">
-              <button type="submit" class="btn btn-primary">保存 SMTP 与策略配置</button>
+              <button type="submit" class="btn btn-primary btn-sm">保存配置</button>
             </div>
           </form>
-
-          <hr style="border:none;border-top:1px solid var(--border);margin:20px 0;">
-
-          <div class="stack">
-            <strong style="font-size:14px;">发送测试邮件验证配置</strong>
-            <div class="row">
-              <input id="smtp-test-to" class="search-input" type="email" style="flex:1;max-width:340px;" value="${esc(tfaInfo.email || '')}" placeholder="输入接收测试邮件的邮箱地址...">
-              <button id="btn-test-smtp" type="button" class="btn btn-secondary">发送测试邮件</button>
-            </div>
-            <div id="smtp-test-result" class="hidden"></div>
-          </div>
         </div>
       `;
 
-      // Policy card active toggle
-      area.querySelectorAll('#policy-cards .policy-card').forEach((card) => {
+      $('smtp-enabled-toggle').addEventListener('change', (e) => {
+        $('smtp-fields-wrap').classList.toggle('hidden', !e.target.checked);
+      });
+
+      box.querySelectorAll('#policy-cards .policy-card').forEach((card) => {
         card.addEventListener('click', () => {
-          area.querySelectorAll('#policy-cards .policy-card').forEach((c) => c.classList.remove('selected'));
+          box.querySelectorAll('#policy-cards .policy-card').forEach((c) => c.classList.remove('selected'));
           card.classList.add('selected');
         });
       });
 
-      // Suggest standard port on security change
       $('smtp-sec-select').addEventListener('change', (e) => {
         const portInput = $('smtp-port-input');
         const map = { starttls: 587, ssl: 465, none: 25 };
@@ -1173,7 +1211,7 @@
       const readSMTPForm = () => {
         const fd = new FormData($('form-smtp'));
         return {
-          enabled: Boolean(fd.get('enabled')),
+          enabled: $('smtp-enabled-toggle').checked,
           email_login_policy: fd.get('email_login_policy') || 'off',
           host: fd.get('host'),
           port: Number(fd.get('port')) || 587,
@@ -1191,7 +1229,7 @@
         ev.preventDefault();
         try {
           await api('/admin/api/smtp', { method: 'PUT', body: JSON.stringify(readSMTPForm()) });
-          toast('SMTP 与验证策略已保存');
+          toast('安全与 SMTP 配置已保存');
           renderSecurity();
         } catch (err) {
           toast(err.message, false);
@@ -1200,21 +1238,21 @@
 
       $('btn-test-smtp').onclick = async () => {
         const to = $('smtp-test-to').value.trim();
-        const box = $('smtp-test-result');
+        const resultBox = $('smtp-test-result');
         if (!to) {
           toast('请输入测试收件邮箱', false);
           return;
         }
-        box.className = 'info-banner';
-        box.textContent = '正在连接 SMTP 服务器并发送测试邮件...';
+        resultBox.className = 'info-banner';
+        resultBox.textContent = '正在发送测试邮件...';
         try {
           const payload = Object.assign(readSMTPForm(), { to });
           const res = await api('/admin/api/smtp/test', { method: 'POST', body: JSON.stringify(payload) });
-          box.className = 'success-banner';
-          box.textContent = res.message || '测试邮件发送成功！';
+          resultBox.className = 'success-banner';
+          resultBox.textContent = res.message || '测试邮件发送成功！';
         } catch (err) {
-          box.className = 'error-banner';
-          box.textContent = '发送失败：' + err.message;
+          resultBox.className = 'error-banner';
+          resultBox.textContent = '发送失败：' + err.message;
         }
       };
 
@@ -1225,7 +1263,7 @@
         $('btn-disable-2fa').onclick = openDisable2FAModal;
       }
     } catch (err) {
-      area.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
+      box.innerHTML = `<div class="error-banner">${esc(err.message)}</div>`;
     }
   }
 
@@ -1348,7 +1386,7 @@
   async function renderDevices() {
     $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-add-dg">+ 新建设备分组</button>`;
     const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+    area.innerHTML = renderSkeleton(4);
 
     try {
       const pageSize = 20;
@@ -1356,20 +1394,30 @@
       const fetchPage = state.devicesOnlineFilter === 'all' ? state.devicesPage : 1;
       const dgParam = state.devicesGroupFilter ? '&device_group_id=' + encodeURIComponent(state.devicesGroupFilter) : '';
 
-      const [dRes, dgRes, uRes, gRes] = await Promise.all([
-        api(`/admin/api/devices?current=${fetchPage}&pageSize=${fetchSize}&keyword=${encodeURIComponent(state.devicesKeyword)}${dgParam}`),
-        api('/admin/api/device-groups'),
-        api('/admin/api/users?pageSize=200'),
-        api('/admin/api/groups'),
-      ]);
-      const rawDevices = dRes.data || [];
-      const deviceGroups = dgRes.data || [];
-      const users = uRes.data || [];
-      const userGroups = gRes.data || [];
+      let rawDevices = [];
+      let totalCount = 0;
+      let deviceGroups = [];
+      let userGroups = null;
+
+      if (state.devicesSubTab === 'groups') {
+        const [dgRes, gRes] = await Promise.all([
+          api('/admin/api/device-groups'),
+          api('/admin/api/groups'),
+        ]);
+        deviceGroups = dgRes.data || [];
+        userGroups = gRes.data || [];
+      } else {
+        const [dRes, dgRes] = await Promise.all([
+          api(`/admin/api/devices?current=${fetchPage}&pageSize=${fetchSize}&keyword=${encodeURIComponent(state.devicesKeyword)}${dgParam}`),
+          api('/admin/api/device-groups'),
+        ]);
+        rawDevices = dRes.data || [];
+        totalCount = Number(dRes.total || 0);
+        deviceGroups = dgRes.data || [];
+      }
 
       let visibleDevices = rawDevices;
-      let totalCount = Number(dRes.total || 0);
-      if (state.devicesOnlineFilter !== 'all') {
+      if (state.devicesSubTab === 'devices' && state.devicesOnlineFilter !== 'all') {
         const wantOnline = state.devicesOnlineFilter === 'online';
         const filtered = rawDevices.filter((d) => Boolean(d.online) === wantOnline);
         totalCount = filtered.length;
@@ -1379,8 +1427,8 @@
 
       area.innerHTML = `
         <div class="tabs">
-          <button class="tab-btn ${state.devicesSubTab === 'devices' ? 'active' : ''}" data-dtab="devices">受管设备 (${esc(dRes.total)})</button>
-          <button class="tab-btn ${state.devicesSubTab === 'groups' ? 'active' : ''}" data-dtab="groups">设备分组与 ACL (${deviceGroups.length})</button>
+          <button class="tab-btn ${state.devicesSubTab === 'devices' ? 'active' : ''}" data-dtab="devices">受管设备</button>
+          <button class="tab-btn ${state.devicesSubTab === 'groups' ? 'active' : ''}" data-dtab="groups">设备分组 (${deviceGroups.length})</button>
         </div>
 
         ${state.devicesSubTab === 'devices' ? `
@@ -1474,7 +1522,20 @@
         `}
       `;
 
-      $('btn-add-dg').onclick = () => openDeviceGroupModal(null, userGroups);
+      const ensureUserGroups = async () => {
+        if (userGroups !== null) return userGroups;
+        const gRes = await api('/admin/api/groups');
+        userGroups = gRes.data || [];
+        return userGroups;
+      };
+
+      $('btn-add-dg').onclick = async () => {
+        try {
+          openDeviceGroupModal(null, await ensureUserGroups());
+        } catch (err) {
+          toast(err.message, false);
+        }
+      };
       area.querySelectorAll('[data-dtab]').forEach((b) => {
         b.onclick = () => {
           state.devicesSubTab = b.dataset.dtab;
@@ -1522,7 +1583,14 @@
 
         if (editDev) {
           const d = rawDevices.find((x) => String(x.id) === editDev);
-          if (d) openDeviceModal(d, users, deviceGroups);
+          if (d) {
+            try {
+              const uRes = await api('/admin/api/users?pageSize=200');
+              openDeviceModal(d, uRes.data || [], deviceGroups);
+            } catch (err) {
+              toast(err.message, false);
+            }
+          }
         } else if (delDev) {
           const ok = await confirmDialog({
             title: '删除设备记录',
@@ -1536,7 +1604,7 @@
           }
         } else if (editDG) {
           const dg = deviceGroups.find((x) => String(x.id) === editDG);
-          if (dg) openDeviceGroupModal(dg, userGroups);
+          if (dg) openDeviceGroupModal(dg, await ensureUserGroups());
         } else if (delDG) {
           const ok = await confirmDialog({
             title: '删除设备分组',
@@ -2068,24 +2136,24 @@
     const sub = state.auditSubTab;
     const pageSize = 30;
     area.innerHTML = `
-      <div class="tabs">
-        <button class="tab-btn ${sub === 'conn' ? 'active' : ''}" data-sub="conn">连接审计</button>
-        <button class="tab-btn ${sub === 'file' ? 'active' : ''}" data-sub="file">文件传输审计</button>
-        <button class="tab-btn ${sub === 'alarm' ? 'active' : ''}" data-sub="alarm">安全告警</button>
-        <button class="tab-btn ${sub === 'login' ? 'active' : ''}" data-sub="login">登录历史</button>
-      </div>
       <div class="card">
         <div class="filter-bar">
           <div class="row">
-            <input id="audit-kw" class="search-input" value="${esc(state.auditKeyword)}" placeholder="输入设备 ID / 用户名 / IP 搜索...">
+            <input id="audit-kw" class="search-input" value="${esc(state.auditKeyword)}" placeholder="搜索设备 ID / 用户名 / IP...">
             <button id="btn-audit-search" class="btn btn-secondary btn-sm">搜索</button>
+          </div>
+          <div class="pill-group">
+            <button class="pill-btn ${sub === 'conn' ? 'active' : ''}" data-sub="conn">连接</button>
+            <button class="pill-btn ${sub === 'login' ? 'active' : ''}" data-sub="login">登录</button>
+            <button class="pill-btn ${sub === 'file' ? 'active' : ''}" data-sub="file">文件</button>
+            <button class="pill-btn ${sub === 'alarm' ? 'active' : ''}" data-sub="alarm">告警</button>
           </div>
         </div>
         <div id="audit-table">${renderSkeleton(4)}</div>
       </div>
     `;
 
-    area.querySelectorAll('.tab-btn').forEach((b) => {
+    area.querySelectorAll('[data-sub]').forEach((b) => {
       b.onclick = () => {
         state.auditSubTab = b.dataset.sub;
         state.auditPage = 1;
@@ -2147,10 +2215,10 @@
   }
 
   // ---------------- 7. SSO (OIDC / GitHub / Google / LDAP) ----------------
-  async function renderSSO() {
-    $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-add-oauth">+ 添加 OIDC / OAuth 提供商</button>`;
-    const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+  async function renderSSO(target = $('content-area')) {
+    $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-add-oauth">+ 添加 SSO</button>`;
+    const area = target || $('content-area');
+    area.innerHTML = renderSkeleton(4);
 
     try {
       const [oRes, ldapCfg] = await Promise.all([
@@ -2161,9 +2229,9 @@
       const callbackURL = window.location.origin + '/api/oidc/callback';
 
       area.innerHTML = `
-        <div class="info-banner" style="margin-bottom:16px;">
+        <div class="info-banner" style="margin-bottom:14px;">
           <div>
-            <strong>统一 OIDC / OAuth 回调地址 (Redirect URI)：</strong>
+            <strong>统一 OIDC / OAuth 回调地址：</strong>
             <code>${esc(callbackURL)}</code>
           </div>
           <button id="btn-copy-callback" class="btn btn-xs btn-primary">复制回调地址</button>
@@ -2171,12 +2239,12 @@
 
         <div class="card">
           <div class="card-header">
-            <h3 class="card-title">OIDC / GitHub / Google 单点登录提供商</h3>
+            <h3 class="card-title">OIDC / GitHub / Google</h3>
           </div>
           <div class="table-wrap">
             ${providers.length ? `
               <table>
-                <thead><tr><th>标识 (op)</th><th>类型</th><th>Client ID</th><th>自动建号</th><th>状态</th><th>操作</th></tr></thead>
+                <thead><tr><th>标识</th><th>类型</th><th>Client ID</th><th>自动建号</th><th>状态</th><th>操作</th></tr></thead>
                 <tbody>
                   ${providers.map((p) => `
                     <tr>
@@ -2193,35 +2261,40 @@
                       </td>
                     </tr>`).join('')}
                 </tbody>
-              </table>` : renderEmpty('暂未配置第三方 SSO 提供商', '支持通用 OIDC、GitHub 与 Google，点击右上角添加')}
+              </table>` : renderEmpty('暂未配置 SSO 提供商', '点击右上角添加 OIDC / GitHub / Google 登录')}
           </div>
         </div>
 
         <div class="card">
-          <div class="card-header"><h3 class="card-title">LDAP / Active Directory 认证配置</h3></div>
+          <div class="card-header">
+            <h3 class="card-title">LDAP / Active Directory</h3>
+            <label class="checkbox-row" style="margin:0;">
+              <span style="font-weight:500;">启用 LDAP</span>
+              <input id="ldap-enabled-toggle" name="enabled" form="form-ldap" type="checkbox" class="toggle-switch" ${ldapCfg.enabled ? 'checked' : ''}>
+            </label>
+          </div>
           <form id="form-ldap" class="stack">
-            <label class="checkbox-row"><input name="enabled" type="checkbox" ${ldapCfg.enabled ? 'checked' : ''}> 启用 LDAP 登录回退认证</label>
             <div class="grid-2">
-              <label class="field"><span>LDAP 地址</span><input name="url" type="text" placeholder="ldap://ldap.example.com:389 或 ldaps://..." value="${esc(ldapCfg.url || '')}"></label>
+              <label class="field"><span>LDAP 地址</span><input name="url" type="text" placeholder="ldap://ldap.example.com:389" value="${esc(ldapCfg.url || '')}"></label>
               <label class="field"><span>Base DN</span><input name="base_dn" type="text" placeholder="dc=example,dc=com" value="${esc(ldapCfg.base_dn || '')}"></label>
               <label class="field"><span>Bind DN</span><input name="bind_dn" type="text" placeholder="cn=readonly,dc=example,dc=com" value="${esc(ldapCfg.bind_dn || '')}"></label>
-              <label class="field"><span>Bind 密码 ${ldapCfg.has_bind_password ? '(已设置，留空不变)' : ''}</span><input name="bind_password" type="password" value=""></label>
+              <label class="field"><span>Bind 密码 ${ldapCfg.has_bind_password ? '(留空不变)' : ''}</span><input name="bind_password" type="password" value=""></label>
               <label class="field"><span>用户过滤表达式</span><input name="user_filter" type="text" value="${esc(ldapCfg.user_filter || '(&(objectClass=person)(|(uid=%s)(sAMAccountName=%s)(mail=%s)))')}"></label>
-              <label class="field"><span>用户名属性 / 邮箱属性</span>
+              <label class="field"><span>用户名 / 邮箱属性</span>
                 <div class="row">
                   <input name="username_attr" type="text" value="${esc(ldapCfg.username_attr || 'uid')}" style="flex:1">
                   <input name="email_attr" type="text" value="${esc(ldapCfg.email_attr || 'mail')}" style="flex:1">
                 </div>
               </label>
             </div>
-            <div class="row">
-              <label class="checkbox-row"><input name="skip_tls_verify" type="checkbox" ${ldapCfg.skip_tls_verify ? 'checked' : ''}> 跳过 LDAPS 自签证书校验</label>
-              <label class="checkbox-row"><input name="auto_register" type="checkbox" ${ldapCfg.auto_register !== false ? 'checked' : ''}> 首次登录自动创建账号</label>
+            <div class="row" style="gap:18px;">
+              <label class="checkbox-row"><input name="skip_tls_verify" type="checkbox" class="toggle-switch" ${ldapCfg.skip_tls_verify ? 'checked' : ''}> <span>跳过 LDAPS 自签证书校验</span></label>
+              <label class="checkbox-row"><input name="auto_register" type="checkbox" class="toggle-switch" ${ldapCfg.auto_register !== false ? 'checked' : ''}> <span>首次登录自动建号</span></label>
             </div>
             <div id="ldap-test-result" class="hidden"></div>
             <div class="row">
-              <button type="submit" class="btn btn-primary">保存 LDAP 配置</button>
-              <button type="button" id="btn-test-ldap" class="btn btn-secondary">测试 LDAP 连接</button>
+              <button type="submit" class="btn btn-primary btn-sm">保存配置</button>
+              <button type="button" id="btn-test-ldap" class="btn btn-secondary btn-sm">测试连接</button>
             </div>
           </form>
         </div>
@@ -2245,7 +2318,7 @@
           if (ok) {
             await api('/admin/api/oauth/providers/' + delId, { method: 'DELETE' });
             toast('已删除');
-            renderSSO();
+            renderSSO(area);
           }
         }
       };
@@ -2253,7 +2326,7 @@
       const readLDAPForm = (form) => {
         const fd = new FormData(form);
         return {
-          enabled: Boolean(fd.get('enabled')),
+          enabled: $('ldap-enabled-toggle').checked,
           url: fd.get('url'),
           base_dn: fd.get('base_dn'),
           bind_dn: fd.get('bind_dn'),
@@ -2358,70 +2431,49 @@
     );
   }
 
-  // ---------------- 8. Server Config & Official Updates ----------------
-  async function renderSystem(forceRefresh = false) {
-    $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-check-updates">检查官方最新版本</button>`;
-    $('btn-check-updates').onclick = () => renderSystem(true);
-
+  // ---------------- 8. Settings (Client Strategy & Official Updates) ----------------
+  async function renderSettings(forceRefresh = false) {
     const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+    const sub = state.settingsSubTab || 'strategy';
+    area.innerHTML = `
+      <div class="tabs">
+        <button class="tab-btn ${sub === 'strategy' ? 'active' : ''}" data-settab="strategy">客户端策略</button>
+        <button class="tab-btn ${sub === 'updates' ? 'active' : ''}" data-settab="updates">版本与更新</button>
+      </div>
+      <div id="settings-body">${renderSkeleton(4)}</div>
+    `;
+
+    area.querySelectorAll('[data-settab]').forEach((btn) => {
+      btn.onclick = () => {
+        state.settingsSubTab = btn.dataset.settab;
+        renderSettings(false);
+      };
+    });
+
+    if (sub === 'updates') {
+      await renderUpdates($('settings-body'), forceRefresh);
+      return;
+    }
+    await renderStrategy($('settings-body'));
+  }
+
+  async function renderUpdates(area = $('content-area'), forceRefresh = false) {
+    $('topbar-actions').innerHTML = `<button class="btn btn-primary btn-sm" id="btn-check-updates">检查最新版本</button>`;
+    $('btn-check-updates').onclick = () => renderSettings(true);
+    area.innerHTML = renderSkeleton(4);
 
     try {
-      const [cfg, upd] = await Promise.all([
-        api('/admin/api/system/server-config'),
-        api('/admin/api/system/updates' + (forceRefresh ? '?refresh=1' : '')),
-      ]);
+      const upd = await api('/admin/api/system/updates' + (forceRefresh ? '?refresh=1' : ''));
       const clientRel = upd.client_release || {};
       const serverRel = upd.server_release || {};
 
       area.innerHTML = `
-        <div class="card">
-          <div class="card-header">
-            <div>
-              <h3 class="card-title">服务端参数、二维码与客户端导入配置</h3>
-              <div class="cell-sub">公钥路径: <code>${esc(cfg.key_file_path)}</code> (${esc(cfg.key_source)})</div>
-            </div>
-            <span class="badge ${cfg.webclient_ready ? 'badge-green' : 'badge-gray'}">${cfg.webclient_ready ? 'Web 客户端已托管 (/webclient/)' : 'Web 客户端未同步'}</span>
-          </div>
-
-          <div class="stack">
-            <div class="grid-2" style="align-items:center;">
-              <div class="kv-grid">
-                <div class="kv-item"><span class="kv-key">ID 服务器</span><span class="kv-val">${esc(cfg.id_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.id_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">中继服务器</span><span class="kv-val">${esc(cfg.relay_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.relay_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">API 服务器</span><span class="kv-val">${esc(cfg.api_server || '-')}</span><button class="btn btn-xs btn-secondary" data-copy-val="${esc(cfg.api_server)}">复制</button></div>
-                <div class="kv-item"><span class="kv-key">Public Key</span><span class="kv-val">${esc(cfg.public_key || '未检测到公钥')}</span><button class="btn btn-xs btn-secondary" id="btn-copy-key">复制</button></div>
-              </div>
-              <div class="qr-panel">
-                ${cfg.qr_data_uri ? `<div class="qr-frame"><img src="${esc(cfg.qr_data_uri)}" alt="RustDesk 配置二维码"></div>` : ''}
-                <span class="cell-sub">手机端「网络设置」扫码即可完成全部配置</span>
-              </div>
-            </div>
-
-            <div>
-              <div class="row" style="justify-content:space-between;margin-bottom:6px;">
-                <span class="stat-label">RustDesk 客户端一键配置字符串（直接粘贴导入到桌面/移动端网络配置）</span>
-                <button class="btn btn-xs btn-primary" id="btn-copy-cfg">复制配置串</button>
-              </div>
-              <div class="code-box">${esc(cfg.config_string || '-')}</div>
-            </div>
-
-            <div>
-              <div class="row" style="justify-content:space-between;margin-bottom:6px;">
-                <span class="stat-label">CLI 静默部署指令</span>
-                <button class="btn btn-xs btn-secondary" id="btn-copy-cli">复制命令</button>
-              </div>
-              <div class="code-box">${esc(cfg.cli_command || '-')}</div>
-            </div>
-          </div>
-        </div>
-
         <div class="grid-2">
           <div class="card">
             <div class="card-header">
               <div>
-                <h3 class="card-title">官方服务端 (rustdesk/rustdesk-server)</h3>
-                <div class="cell-sub">Docker 镜像: <code>${esc(upd.docker_image)}</code></div>
+                <h3 class="card-title">官方服务端 (hbbs / hbbr)</h3>
+                <div class="cell-sub">镜像: <code>${esc(upd.docker_image)}</code></div>
               </div>
               <span class="badge badge-green">${esc(serverRel.tag_name || 'latest')}</span>
             </div>
@@ -2429,53 +2481,42 @@
             ${serverRel.error ? `<div class="error-banner" style="margin-bottom:10px;">${esc(serverRel.error)}</div>` : ''}
             <div class="stack">
               <div>
-                <div class="row" style="justify-content:space-between;margin-bottom:5px;">
-                  <span class="stat-label">仅更新官方 hbbs & hbbr</span>
+                <div class="row" style="justify-content:space-between;margin-bottom:4px;">
+                  <span class="stat-label">更新官方服务端</span>
                   <button class="btn btn-xs btn-secondary" data-copy-val="./scripts/update.sh">复制</button>
                 </div>
                 <div class="code-box">./scripts/update.sh</div>
               </div>
               <div>
-                <div class="row" style="justify-content:space-between;margin-bottom:5px;">
-                  <span class="stat-label">拉取 GitHub 代码 + 重建 API + 更新官方服务端</span>
-                  <button class="btn btn-xs btn-secondary" data-copy-val="./scripts/update.sh --all">复制</button>
+                <div class="row" style="justify-content:space-between;margin-bottom:4px;">
+                  <span class="stat-label">同步更新 API 与官方服务端</span>
+                  <button class="btn btn-xs btn-secondary" data-copy-val="./scripts/update.sh --pull-api">复制</button>
                 </div>
-                <div class="code-box">./scripts/update.sh --all</div>
+                <div class="code-box">./scripts/update.sh --pull-api</div>
               </div>
             </div>
-            <p style="margin:12px 0 0;"><a href="${esc(serverRel.html_url)}" target="_blank" rel="noopener">查看 GitHub 官方服务端 Release ↗</a></p>
+            <p style="margin:12px 0 0;"><a href="${esc(serverRel.html_url)}" target="_blank" rel="noopener">查看官方服务端 Release ↗</a></p>
           </div>
 
           <div class="card">
             <div class="card-header">
               <div>
                 <h3 class="card-title">官方客户端 (rustdesk/rustdesk)</h3>
-                <div class="cell-sub">发布时间: ${esc(fmtTime(clientRel.published_at))}</div>
+                <div class="cell-sub">最新客户端版本与下载入口</div>
               </div>
               <span class="badge badge-blue">${esc(clientRel.tag_name || '-')}</span>
             </div>
+            <p class="cell-sub" style="margin-top:0;">发布时间: ${esc(fmtTime(clientRel.published_at))}</p>
             ${clientRel.error ? `<div class="error-banner" style="margin-bottom:10px;">${esc(clientRel.error)}</div>` : ''}
-            <div class="table-wrap" style="max-height:260px;overflow-y:auto;">
-              <table>
-                <thead><tr><th>官方安装包</th><th>大小</th><th>下载</th></tr></thead>
-                <tbody>
-                  ${(clientRel.assets || []).map((a) => `
-                    <tr>
-                      <td>${esc(a.name)}</td>
-                      <td>${esc(fmtBytes(a.size))}</td>
-                      <td><a href="${esc(a.url)}" target="_blank" rel="noopener">下载</a></td>
-                    </tr>`).join('') || '<tr><td colspan="3">无法连接 GitHub API 或暂无列表</td></tr>'}
-                </tbody>
-              </table>
+            <div class="kv-grid" style="margin-bottom:12px;">
+              <div class="kv-item"><span class="kv-key">最新版本</span><span class="kv-val">${esc(clientRel.tag_name || '-')}</span></div>
+              <div class="kv-item"><span class="kv-key">可用安装包</span><span class="kv-val">${esc(String((clientRel.assets || []).length))} 个平台构建</span></div>
             </div>
-            <p style="margin:12px 0 0;"><a href="${esc(clientRel.html_url)}" target="_blank" rel="noopener">前往 GitHub 下载全部官方客户端 ↗</a></p>
+            <a class="btn btn-secondary btn-sm" href="${esc(clientRel.html_url)}" target="_blank" rel="noopener">前往 GitHub 下载客户端 ↗</a>
           </div>
         </div>
       `;
 
-      $('btn-copy-key').onclick = () => copyText(cfg.public_key, '已复制官方 Public Key');
-      $('btn-copy-cfg').onclick = () => copyText(cfg.config_string, '已复制一键配置字符串');
-      $('btn-copy-cli').onclick = () => copyText(cfg.cli_command, '已复制 CLI 命令');
       area.querySelectorAll('[data-copy-val]').forEach((btn) => {
         btn.onclick = () => copyText(btn.dataset.copyVal);
       });
@@ -2485,15 +2526,14 @@
   }
 
   // ---------------- 8b. Client Default Strategy ----------------
-  async function renderStrategy() {
+  async function renderStrategy(area = $('content-area')) {
     $('topbar-actions').innerHTML = `
       <button class="btn btn-secondary btn-sm" id="btn-refresh-strategy">刷新</button>
       <button class="btn btn-primary btn-sm" id="btn-save-strategy">保存策略</button>
     `;
-    $('btn-refresh-strategy').onclick = renderStrategy;
+    $('btn-refresh-strategy').onclick = () => renderStrategy(area);
 
-    const area = $('content-area');
-    area.innerHTML = renderSkeleton(5);
+    area.innerHTML = renderSkeleton(4);
 
     const presets = [
       { id: 'smooth60', title: '60 FPS 流畅', meta: '自定义 · 画质 75%', quality: 'custom', fps: 60, imgQ: 75 },
