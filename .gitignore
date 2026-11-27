@@ -1,0 +1,10 @@
+.env
+data/
+nginx/ssl/*.pem
+nginx/ssl/*.key
+nginx/ssl/*.crt
+*.db
+*.db-wal
+*.db-shm
+*.exe
+dist/

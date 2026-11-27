@@ -1,0 +1,10 @@
+.git
+.env
+data/
+nginx/ssl/
+*.db
+*.db-wal
+*.db-shm
+dist/
+README.md
+scripts/

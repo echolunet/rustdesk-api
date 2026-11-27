@@ -1,0 +1,218 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>RustDesk API 安全控制台</title>
+  <link rel="stylesheet" href="./app.css">
+</head>
+<body>
+  <div id="toast-root" class="toast-root" aria-live="polite"></div>
+
+  <!-- Login View -->
+  <div id="login-view" class="login-wrapper hidden">
+    <div class="login-grid-bg" aria-hidden="true"></div>
+    <div class="aurora-orb aurora-1" aria-hidden="true"></div>
+    <div class="aurora-orb aurora-2" aria-hidden="true"></div>
+
+    <div class="login-card">
+      <div class="brand-row">
+        <div class="brand-logo" aria-hidden="true">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
+          </svg>
+        </div>
+        <div>
+          <h1>RustDesk API 控制台</h1>
+          <p class="muted">自建开源 API · 官方服务端安全编排</p>
+        </div>
+      </div>
+
+      <!-- Step 1: Credentials -->
+      <div id="login-step-1">
+        <form id="login-form" class="stack">
+          <label class="field">
+            <span>管理员账号</span>
+            <input id="login-username" type="text" autocomplete="username" placeholder="admin" required>
+          </label>
+          <label class="field">
+            <span>登录密码</span>
+            <div class="input-with-action">
+              <input id="login-password" type="password" autocomplete="current-password" placeholder="请输入管理员密码" required>
+              <button id="btn-toggle-pw" type="button" class="input-icon-btn" title="显示/隐藏密码" aria-label="显示或隐藏密码">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M2 12s3-7 10-7 10 7 10 7-3 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </label>
+          <div id="login-error" class="error-banner hidden"></div>
+          <button id="btn-login-submit" type="submit" class="btn btn-primary btn-block btn-lg">登录控制台</button>
+        </form>
+
+        <div class="login-hint-box">
+          <span>首次部署提示</span>
+          <p>若未在 <code>.env</code> 设置 <code>ADMIN_INIT_PASSWORD</code>，请执行 <code>docker logs rustdesk-api</code> 查看初始密码。</p>
+        </div>
+      </div>
+
+      <!-- Step 2: 2FA / Email OTP Verification -->
+      <div id="login-step-2" class="hidden">
+        <div class="otp-header">
+          <div class="otp-badge-icon" aria-hidden="true">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/>
+            </svg>
+          </div>
+          <div>
+            <h2 id="otp-title">两步安全验证</h2>
+            <p id="otp-desc" class="muted">请输入 6 位动态验证码完成登录</p>
+          </div>
+        </div>
+
+        <form id="login-otp-form" class="stack">
+          <div id="otp-boxes-wrap" class="stack">
+            <div id="otp-boxes" class="otp-grid" aria-label="6 位验证码">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1" autocomplete="one-time-code">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1">
+              <input class="otp-box" type="text" inputmode="numeric" maxlength="1">
+            </div>
+          </div>
+
+          <div id="recovery-input-wrap" class="hidden">
+            <label class="field">
+              <span>备用恢复码 (例如 ABCD-EFGH)</span>
+              <input id="login-recovery-input" type="text" placeholder="XXXX-XXXX" autocomplete="off">
+            </label>
+          </div>
+
+          <div class="row" style="justify-content:space-between;">
+            <button id="btn-toggle-recovery" type="button" class="link-btn hidden">改用备用恢复码</button>
+            <button id="btn-resend-email" type="button" class="link-btn hidden">重新发送邮箱验证码</button>
+            <button id="btn-otp-back" type="button" class="link-btn">← 返回账号密码</button>
+          </div>
+
+          <div id="login-otp-error" class="error-banner hidden"></div>
+          <button id="btn-otp-submit" type="submit" class="btn btn-primary btn-block btn-lg">验证并登录</button>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- App Shell -->
+  <div id="app-shell" class="app-shell hidden">
+    <div id="sidebar-backdrop" class="sidebar-backdrop hidden"></div>
+
+    <aside id="sidebar" class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-logo sm" aria-hidden="true">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+            <rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>
+          </svg>
+        </div>
+        <div class="brand-meta">
+          <div class="brand-title">RustDesk API</div>
+          <div class="brand-sub"><span class="live-dot"></span> Official Server Stack</div>
+        </div>
+      </div>
+
+      <nav class="nav" id="sidebar-nav">
+        <div class="nav-section-label">概览与资产</div>
+        <button class="nav-item active" data-tab="dashboard">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="9" rx="1"/><rect x="14" y="3" width="7" height="5" rx="1"/><rect x="14" y="12" width="7" height="9" rx="1"/><rect x="3" y="16" width="7" height="5" rx="1"/></svg>
+          <span>概览仪表盘</span>
+        </button>
+        <button class="nav-item" data-tab="devices">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/></svg>
+          <span>设备与权限组</span>
+        </button>
+        <button class="nav-item" data-tab="ab">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1 0-5H20"/></svg>
+          <span>地址簿与标签</span>
+        </button>
+
+        <div class="nav-section-label">身份与安全</div>
+        <button class="nav-item" data-tab="users">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+          <span>用户与分组</span>
+        </button>
+        <button class="nav-item" data-tab="security">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+          <span>安全与验证 (2FA)</span>
+        </button>
+        <button class="nav-item" data-tab="sso">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10"/><path d="m9 12 2 2 4-4"/></svg>
+          <span>第三方登录 (SSO)</span>
+        </button>
+
+        <div class="nav-section-label">系统与运维</div>
+        <button class="nav-item" data-tab="audit">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M16 13H8"/><path d="M16 17H8"/><path d="M10 9H8"/></svg>
+          <span>审计与登录日志</span>
+        </button>
+        <button class="nav-item" data-tab="system">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span>配置与官方更新</span>
+        </button>
+      </nav>
+
+      <div class="sidebar-footer">
+        <a class="nav-link-btn" href="/webclient/" target="_blank" rel="noopener">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg>
+          <span>打开 Web 客户端</span>
+          <span class="arrow">↗</span>
+        </a>
+        <div class="user-box">
+          <div class="user-identity">
+            <span id="current-admin-avatar" class="avatar-dot">A</span>
+            <span id="current-admin-name">admin</span>
+          </div>
+          <div class="user-actions">
+            <button id="btn-go-security" class="btn btn-xs btn-ghost" title="安全设置">2FA</button>
+            <button id="btn-change-pw" class="btn btn-xs btn-ghost" title="修改密码">改密</button>
+            <button id="btn-logout" class="btn btn-xs btn-ghost" title="退出登录">退出</button>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="btn-menu" class="icon-btn mobile-only" aria-label="打开菜单">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+          </button>
+          <div>
+            <h2 id="page-title">概览仪表盘</h2>
+            <p id="page-subtitle" class="page-subtitle">实时运行状态与官方服务端连接概览</p>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <div id="topbar-actions" class="topbar-actions"></div>
+          <button id="btn-theme" class="icon-btn" title="切换浅色/深色主题" aria-label="切换主题">
+            <svg id="icon-theme-sun" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="m4.93 4.93 1.41 1.41"/><path d="m17.66 17.66 1.41 1.41"/><path d="M2 12h2"/><path d="M20 12h2"/><path d="m6.34 17.66-1.41 1.41"/><path d="m19.07 4.93-1.41 1.41"/></svg>
+            <svg id="icon-theme-moon" class="hidden" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3a6 6 0 0 0 9 9 9 9 0 1 1-9-9Z"/></svg>
+          </button>
+        </div>
+      </header>
+      <section id="content-area" class="content"></section>
+    </main>
+  </div>
+
+  <!-- Reusable Modal -->
+  <div id="modal-backdrop" class="modal-backdrop hidden" role="dialog" aria-modal="true">
+    <div id="modal-card" class="modal-card">
+      <div class="modal-header">
+        <h3 id="modal-title">编辑</h3>
+        <button id="modal-close" class="icon-btn" aria-label="关闭弹窗">✕</button>
+      </div>
+      <div id="modal-body" class="modal-body"></div>
+    </div>
+  </div>
+
+  <script src="./app.js"></script>
+</body>
+</html>

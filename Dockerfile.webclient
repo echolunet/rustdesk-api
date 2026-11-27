@@ -1,0 +1,18 @@
+# syntax=docker/dockerfile:1
+
+ARG FLUTTER_IMAGE=ghcr.io/cirruslabs/flutter:stable
+FROM ${FLUTTER_IMAGE} AS web-builder
+
+ARG RUSTDESK_REPO=https://github.com/rustdesk/rustdesk.git
+ARG RUSTDESK_REF=master
+
+WORKDIR /build
+
+RUN git clone --depth 1 --branch "${RUSTDESK_REF}" "${RUSTDESK_REPO}" rustdesk && \
+    cd /build/rustdesk/flutter && \
+    flutter config --enable-web && \
+    flutter pub get && \
+    flutter build web --release
+
+FROM scratch AS export
+COPY --from=web-builder /build/rustdesk/flutter/build/web /
